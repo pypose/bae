@@ -68,6 +68,29 @@
   </tr>
 </table>
 
+### RGB-D Pose Refinement
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="doc/assets/monitor_office.gif" alt="Monitor and desk point clouds aligning during camera pose refinement" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="doc/assets/lecture_room.gif" alt="Lecture room table edges aligning during camera pose refinement" width="100%" />
+    </td>
+    <td align="center" width="33%">
+      <img src="doc/assets/kitchenette.gif" alt="Kitchen cabinet and door point clouds aligning during camera pose refinement" width="100%" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">Monitor Office</td>
+    <td align="center">Lecture Room</td>
+    <td align="center">Kitchenette</td>
+  </tr>
+</table>
+
+<p align="center"><sub>DA3 point clouds from 156 undistorted DSLR views per scene, animated through actual camera-pose optimization states. Raw optimizer outputs; the current photometric guard rejects these proposals.</sub></p>
+
 ## News
 
 - 2026-03-22: Added [skills](.agent/skills) for coding agents to write custom compute graphs.
