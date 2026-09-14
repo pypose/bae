@@ -1,0 +1,32 @@
+{
+  "c50d2d1d42": {
+    "title": "Monitor office",
+    "headline": "Bring the workstation into alignment.",
+    "description": "Watch the monitor bezels, keyboard and desk edges consolidate as the cameras move into alignment.",
+    "view": 40,
+    "detail_view": 122,
+    "detail_fov": 52,
+    "detail_title": "Follow the front edge of the desk.",
+    "detail_description": "The repeated tabletop edges and displaced objects become more coherent. Residual depth artifacts remain visible."
+  },
+  "38d58a7a31": {
+    "title": "Lecture room",
+    "headline": "Follow the room's long lines.",
+    "description": "Rows of tables, window frames and chair backs expose small pose errors across a much larger room.",
+    "view": 16,
+    "detail_view": 106,
+    "detail_fov": 58,
+    "detail_title": "A tabletop becomes a continuous edge.",
+    "detail_description": "Look at the nearest table: repeated, jagged surface boundaries align after refinement. The underlying DA3 depth is unchanged."
+  },
+  "40aec5fffa": {
+    "title": "Kitchenette",
+    "headline": "Resolve the everyday details.",
+    "description": "Cabinet seams, handles and the red door frame reveal alignment changes across the length of the room.",
+    "view": 48,
+    "detail_view": 32,
+    "detail_fov": 48,
+    "detail_title": "Watch the cabinet handles settle.",
+    "detail_description": "Multiple observations of the handles and cabinet seams move together. Both sides use the same photographs and filtering."
+  }
+}

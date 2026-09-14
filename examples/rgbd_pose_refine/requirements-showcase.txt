@@ -1,0 +1,20 @@
+# Install after bae and the PyPose git revision documented in SHOWCASE.md.
+# DA3 is installed separately with --no-deps to preserve the container's CUDA torch.
+# moviepy 1.0.3 is an eager DA3 export import; its unused legacy decorator pin
+# conflicts with the NVIDIA container constraints, so install it with --no-deps.
+open3d==0.19.0
+moderngl==5.12.0
+huggingface_hub==1.13.0
+omegaconf==2.3.1
+e3nn==0.6.0
+einops==0.8.1
+imageio==2.37.4
+imageio-ffmpeg==0.6.0
+pycolmap==4.2.0
+plyfile==1.1.3
+pillow_heif==1.7.0
+safetensors==0.5.3
+trimesh==5.1.0
+evo==1.37.1
+proglog
+lz4

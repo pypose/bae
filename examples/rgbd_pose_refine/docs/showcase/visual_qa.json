@@ -1,0 +1,43 @@
+{
+  "scenes": [
+    {
+      "scene": "c50d2d1d42 \u00b7 156 / 327 registered frames",
+      "auc": "37.5 \u2192 69.0",
+      "label": "GIANT 1.1 \u00b7 ambient gradients"
+    },
+    {
+      "scene": "38d58a7a31 \u00b7 156 / 410 registered frames",
+      "auc": "56.9 \u2192 73.8",
+      "label": "GIANT 1.1 \u00b7 ambient gradients"
+    },
+    {
+      "scene": "40aec5fffa \u00b7 156 / 219 registered frames",
+      "auc": "45.9 \u2192 65.2",
+      "label": "GIANT 1.1 \u00b7 ambient gradients"
+    },
+    {
+      "scene": "3f15a9266d \u00b7 144 / 906 registered frames",
+      "auc": "4.9 \u2192 22.6",
+      "label": "Historical showcase run \u00b7 before ambient-gradient correction"
+    },
+    {
+      "scene": "0d2ee665be \u00b7 139 / 189 registered frames",
+      "auc": "44.8 \u2192 46.7",
+      "label": "Historical showcase run \u00b7 before ambient-gradient correction"
+    }
+  ],
+  "javascript_errors": [],
+  "reel_frames": 792,
+  "reel_seconds": 33,
+  "desktop_width": 1440,
+  "mobile_width": 390,
+  "original_posters_and_videos_preserved": true,
+  "browser_playback": {
+    "tested_tours": 3,
+    "dimensions": [
+      1920,
+      1080
+    ],
+    "duration_seconds_each": 11
+  }
+}

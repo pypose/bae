@@ -1,0 +1,17 @@
+{
+  "view": 48,
+  "excluded_source_view": 48,
+  "variant": "bae_de_raw",
+  "renderer": "textured",
+  "confidence_percentile": 20,
+  "depth_edge_relative_threshold": 0.06,
+  "blending_depth_tolerance": 0.035,
+  "voxel_length": null,
+  "overview_degrees": null,
+  "front_cut_radius_fraction": null,
+  "source_vertices": 6604416,
+  "size": [
+    1200,
+    900
+  ]
+}

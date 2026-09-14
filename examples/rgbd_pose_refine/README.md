@@ -48,27 +48,23 @@ blank walls, or already-good poses).
 Everything (correspondence search, structure fusion, visibility resolution)
 is implemented as batched GPU tensor ops — see the module docstrings in
 `photometric.py`, `covis.py`, and `guards.py` for exactly how each step is
-vectorized, and `visualize.py` for how the GIF above is generated.
+vectorized. See [SHOWCASE.md](SHOWCASE.md) for rendering real DSLR scenes.
 
 ## Install
 
 ```bash
 pip install --no-build-isolation -v -e .        # base bae install, from repo root
 pip install opencv-python lz4                    # this example's extra deps
-pip install viser                                # only needed to regenerate the demo GIF
 ```
 
-Regenerating the GIF also needs a Chrome/Chromium binary on `$PATH` (used
-headlessly to drive the WebGL render — see `visualize.py`).
+The DSLR showcase dependencies and rendering commands are documented in
+[SHOWCASE.md](SHOWCASE.md).
 
 ## Quickstart
 
 ```bash
 # Sanity-check the math/API first (fast, no dataset needed):
 pytest examples/rgbd_pose_refine/tests/
-
-# Regenerate the demo GIF above:
-python examples/rgbd_pose_refine/visualize.py
 
 # Run on a real ScanNet++ scene:
 python examples/rgbd_pose_refine/run_refine.py --scene_id 7831862f02 --stage odometry+structure
@@ -95,9 +91,8 @@ initial pose/intrinsics). See `dataset.py` for the exact expected layout and
 | `photometric.py` | The two refinement stages (odometry, structure) |
 | `dataset.py` | ScanNet++ iPhone data loader |
 | `eval.py` | Pose-accuracy evaluation against ground truth |
-| `synthetic_scene.py` | Small dataset-free scene generator, used by tests and `visualize.py` |
+| `tests/_scene_fixture.py` | Textured-plane fixture for numerical correctness tests |
 | `run_refine.py` | CLI entry point |
-| `visualize.py` | Renders the demo GIF above (viser + headless Chrome) |
 
 ## CLI reference
 
