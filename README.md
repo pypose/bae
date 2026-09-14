@@ -89,8 +89,6 @@
   </tr>
 </table>
 
-<p align="center"><sub>DA3 point clouds from 156 undistorted DSLR views per scene, animated through actual camera-pose optimization states. Raw optimizer outputs; the current photometric guard rejects these proposals.</sub></p>
-
 ## News
 
 - 2026-03-22: Added [skills](.agent/skills) for coding agents to write custom compute graphs.
