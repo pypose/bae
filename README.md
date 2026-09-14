@@ -89,6 +89,8 @@
   </tr>
 </table>
 
+<p align="center"><sub>bae refines camera poses predicted by Depth Anything 3 (DA3), bringing feed-forward 3D reconstructions into sharper alignment.</sub></p>
+
 ## News
 
 - 2026-03-22: Added [skills](.agent/skills) for coding agents to write custom compute graphs.
