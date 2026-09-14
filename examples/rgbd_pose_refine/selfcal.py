@@ -1,14 +1,13 @@
-"""Pose/depth-free focal self-calibration, ported from
-`da3/refine_poses.py::estimate_focal_selfcal` (+ its SIFT matching helpers).
+"""Pose/depth-free focal self-calibration.
 
 Runs once per scene, on CPU, before any GPU optimization. This is a mandatory
-default pre-step for Form D/E/D+E (see README): dense photometric refinement
-unprojects every pixel through K, so a systematically wrong focal length bends
-every ray and corrupts the photometric optimum regardless of pose. This
-estimator conditions on neither the predicted poses nor the predicted depth
-(both of which the refinement is trying to fix), so it cannot be circular the
-way a depth- or pose-conditioned calibration would be. It is a near no-op when
-the input intrinsics are already accurate.
+default pre-step for both refinement stages (see README): dense photometric
+refinement unprojects every pixel through K, so a systematically wrong focal
+length bends every ray and corrupts the photometric optimum regardless of
+pose. This estimator conditions on neither the input poses nor the input
+depth (both of which the refinement is trying to fix), so it cannot be
+circular the way a depth- or pose-conditioned calibration would be. It is a
+near no-op when the input intrinsics are already accurate.
 """
 from __future__ import annotations
 

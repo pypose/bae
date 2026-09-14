@@ -1,5 +1,6 @@
-"""Covisibility graph construction, ported verbatim (logic-preserving) from
-`da3/refine_poses.py::build_covis_graph`."""
+"""Covisibility graph construction: which pairs of views are close enough
+and differently-angled enough to give a useful photometric/geometric
+constraint between them."""
 from __future__ import annotations
 
 import numpy as np

@@ -1,6 +1,6 @@
-"""Form D and Form E: bae-native, GPU-vectorized dense photometric pose
-refinement, reimplementing the two Open3D tutorials (RGB-D Odometry, Color
-Map Optimization) that were separately verified to work in `da3/refine_poses.py`.
+"""bae-native, GPU-vectorized dense photometric pose refinement: two
+complementary stages reimplementing Open3D's RGB-D Odometry and Color Map
+Optimization tutorials natively on GPU.
 
 Design note (see README for the full argument): `bae`'s sparse-Jacobian tracer
 vmaps every tensor argument to a `@psjac` function over dim 0 unconditionally
@@ -11,12 +11,16 @@ called only under `torch.no_grad()`, once per outer relinearization, to build
 a fixed (intensity, gradient, pixel) linearization point; the `@psjac`
 residual itself is pure SE3/pinhole tensor algebra.
 
-Form D collapses Open3D's two-stage pipeline (per-pair Gauss-Newton odometry,
-then a separate pose-graph solve) into a single joint gauge-fixed sparse LM
-problem over all views and all covisible-pair pixel correspondences at once
--- this is what "fully vectorized" means in `bae`'s idiom (see README).
+The odometry stage collapses Open3D's two-stage pipeline (per-pair
+Gauss-Newton odometry, then a separate pose-graph solve) into a single
+joint gauge-fixed sparse LM problem over all views and all covisible-pair
+pixel correspondences at once -- this is what "fully vectorized" means in
+`bae`'s idiom (see README).
 """
 from __future__ import annotations
+
+import os
+os.environ.setdefault('BAE_USE_PYPOSE_AMBIENT_GRAD', '1')
 
 import numpy as np
 import pypose as pp
@@ -27,6 +31,10 @@ from pypose.autograd.function import psjac
 
 from bae.optim import LM
 from bae.utils.pysolvers import PCG
+from bae.utils.pypose_ambient_grad import maybe_install_pypose_ambient_grad_monkeypatch
+
+# Also support importing this example after another module already imported bae.
+maybe_install_pypose_ambient_grad_monkeypatch()
 
 from covis import build_covis_graph
 from geometry import (as_44, affine_inv, orthonormalize, unproject_pixels,
@@ -41,7 +49,7 @@ def to_gray(images) -> torch.Tensor:
 
 
 # --------------------------------------------------------------------------- #
-# Form D: joint sparse-LM photometric refinement
+# Odometry stage: joint sparse-LM photometric refinement over covisible pairs
 # --------------------------------------------------------------------------- #
 @psjac
 def photo_residual(pose_i, pose_j, rd_i_cam, K_j, I_i0, I_j0, gx_j0, gy_j0, uv_j0, wgt):
@@ -82,7 +90,8 @@ class RGBDPhotoModel(nn.Module):
 
 
 def build_photo_correspondences(c2w_se3, pairs, gray, depth, K, gx_all, gy_all,
-                                 n_samples=2048, z_eps=1e-3, certain_boost=3.0):
+                                 n_samples=2048, z_eps=1e-3, certain_boost=3.0,
+                                 max_depth_diff=None):
     """Build one relinearization's fixed correspondence set, entirely under
     `no_grad` (the only place `sample_at`/`grid_sample` is called).
 
@@ -143,6 +152,7 @@ def build_photo_correspondences(c2w_se3, pairs, gray, depth, K, gx_all, gy_all,
             return None
         rd_i_cam, uv_i, uv_j0 = rd_i_cam[m], uv_i[m], uv_j0[m]
         i_flat, j_flat = i_flat[m], j_flat[m]
+        z_j = z_j[m]
         M = rd_i_cam.shape[0]
 
         # ---- Step 3: image sampling, grouped by the <=N unique views
@@ -151,6 +161,7 @@ def build_photo_correspondences(c2w_se3, pairs, gray, depth, K, gx_all, gy_all,
         I_j0 = torch.empty(M, dtype=dtype, device=device)
         gx_j0 = torch.empty(M, dtype=dtype, device=device)
         gy_j0 = torch.empty(M, dtype=dtype, device=device)
+        target_depth = torch.empty(M, dtype=dtype, device=device) if max_depth_diff is not None else None
         for vv in torch.unique(i_flat):
             sel = i_flat == vv
             I_i0[sel] = sample_at(gray[vv], uv_i[sel], H, W)
@@ -159,6 +170,17 @@ def build_photo_correspondences(c2w_se3, pairs, gray, depth, K, gx_all, gy_all,
             I_j0[sel] = sample_at(gray[vv], uv_j0[sel], H, W)
             gx_j0[sel] = sample_at(gx_all[vv], uv_j0[sel], H, W)
             gy_j0[sel] = sample_at(gy_all[vv], uv_j0[sel], H, W)
+            if target_depth is not None:
+                target_depth[sel] = sample_at(depth[vv], uv_j0[sel], H, W)
+
+        if target_depth is not None:
+            visible = (target_depth > z_eps) & ((target_depth - z_j).abs() <= max_depth_diff)
+            if int(visible.sum()) < 8:
+                return None
+            i_flat, j_flat = i_flat[visible], j_flat[visible]
+            rd_i_cam, uv_j0 = rd_i_cam[visible], uv_j0[visible]
+            I_i0, I_j0 = I_i0[visible], I_j0[visible]
+            gx_j0, gy_j0 = gx_j0[visible], gy_j0[visible]
 
     cat = {"i_idx": i_flat, "j_idx": j_flat, "rd_i_cam": rd_i_cam, "I_i0": I_i0,
            "I_j0": I_j0, "gx_j0": gx_j0, "gy_j0": gy_j0, "uv_j0": uv_j0}
@@ -185,8 +207,7 @@ def _downsample_depth(depth: torch.Tensor, z_eps: float = 1e-3) -> torch.Tensor:
 def build_pyramid(gray: torch.Tensor, depth: torch.Tensor, K: torch.Tensor, n_levels: int = 3):
     """Returns a list ordered COARSE -> FINE: [(gray_l, depth_l, K_l, H_l, W_l), ...].
     Intrinsics are scaled by simple multiplication (no sub-pixel pixel-center
-    correction), matching this repo's existing convention for resolution
-    rescaling (`scannetpp.py::_prep_unposed`)."""
+    correction)."""
     levels = []
     g, d, k = gray, depth, K.clone()
     for _ in range(n_levels):
@@ -201,16 +222,22 @@ def build_pyramid(gray: torch.Tensor, depth: torch.Tensor, K: torch.Tensor, n_le
     return levels
 
 
-def refine_form_d(w2c_init, depth, K, images, *, n_neighbors=16,
+def refine_odometry(w2c_init, depth, K, images, *, n_neighbors=16,
                    min_baseline_frac=0.0, min_rot_deg=0.0, n_samples=2048,
                    pyramid_levels=3, n_relin=(3, 2, 1), n_inner=5,
                    huber_delta=1.5, certain_boost=3.0, z_eps=1e-3,
-                   dtype=torch.float64, verbose=True):
-    """Form D: joint gauge-fixed sparse-LM dense photometric refinement,
-    coarse-to-fine over `pyramid_levels` image pyramid levels.
+                   dtype=torch.float64, verbose=True, history=None,
+                   max_depth_diff=None):
+    """Joint gauge-fixed sparse-LM dense photometric refinement over
+    covisible-view pairs, coarse-to-fine over `pyramid_levels` image pyramid
+    levels.
 
     w2c_init: (N,3,4) or (N,4,4). depth: (N,H,W) meters. K: (N,3,3).
     images: (N,H,W,3) uint8. Returns refined w2c (N,3,4) on depth's device.
+
+    history: optional list; if given, the current w2c is appended to it after
+    every inner LM step (purely for diagnostics/visualization, e.g.
+    `showcase_render.py` -- has no effect on the optimization itself).
     """
     assert len(n_relin) == pyramid_levels, "n_relin must have one entry per pyramid level"
     device = depth.device
@@ -230,10 +257,11 @@ def refine_form_d(w2c_init, depth, K, images, *, n_neighbors=16,
             c2w_se3 = pp.mat2SE3(affine_inv(cur_w2c)[:, :3, :], check=False).tensor().to(dtype)
             corr = build_photo_correspondences(
                 c2w_se3.detach(), pairs, gray_l, depth_l, K_l, gx_all, gy_all,
-                n_samples=n_samples, z_eps=z_eps, certain_boost=certain_boost)
+                n_samples=n_samples, z_eps=z_eps, certain_boost=certain_boost,
+                max_depth_diff=max_depth_diff)
             if corr is None or corr["i_idx"].numel() < 8:
                 if verbose:
-                    print(f"[FormD] level {lvl} relin {relin}: too few correspondences, stop level")
+                    print(f"[odometry] level {lvl} relin {relin}: too few correspondences, stop level")
                 break
 
             model = RGBDPhotoModel(c2w_se3.clone()).to(device)
@@ -258,9 +286,16 @@ def refine_form_d(w2c_init, depth, K, images, *, n_neighbors=16,
                         delta = huber_delta * rn.median().clamp(min=1e-9)
                         hw = (delta / rn.clamp(min=delta)).sqrt()[:, None]
                         inp["wgt"] = base_w * hw
+                # IRLS changes the objective between steps. LM caches its last
+                # loss; comparing a new weighted loss to that stale value can
+                # reject every update even at infinite damping.
+                opt.loss = opt.model.loss(inp, None)
                 loss = opt.step(inp)
+                if history is not None:
+                    full_it = torch.cat([model.fixed0, model.pose_rest.data], dim=0)
+                    history.append(orthonormalize(affine_inv(pp.SE3(full_it).matrix())).to(dtype))
             if verbose:
-                print(f"[FormD] level {lvl} relin {relin}: "
+                print(f"[odometry] level {lvl} relin {relin}: "
                       f"{corr['i_idx'].numel()} corr, final loss {loss.item():.6f}", flush=True)
 
             full = torch.cat([model.fixed0, model.pose_rest.data], dim=0)
@@ -271,12 +306,12 @@ def refine_form_d(w2c_init, depth, K, images, *, n_neighbors=16,
 
 
 # --------------------------------------------------------------------------- #
-# Form E: joint photometric BA against a fixed fused structure
+# Structure stage: joint photometric refinement against a fixed fused structure
 # --------------------------------------------------------------------------- #
 @psjac
 def structure_residual(pose_v, Xw_pt, K_v, C0, I_v0, gx_v0, gy_v0, uv_v0, wgt):
-    """Simpler than Form D: structure (`Xw_pt`) is a fixed buffer, not a
-    parameter -- only the observing view's pose is free."""
+    """Simpler than the odometry stage's residual: structure (`Xw_pt`) is a
+    fixed buffer, not a parameter -- only the observing view's pose is free."""
     Xc = pp.SE3(pose_v).Inv().Act(Xw_pt)
     uv_v, _ = project_to_pixels(Xc, K_v)
     duv = uv_v - uv_v0
@@ -343,7 +378,8 @@ def fuse_structure(c2w_se3, depth, gray, K, voxel_length=0.02,
     return X_struct, C_struct
 
 
-def zbuffer_visible_all_views(X_struct, c2w_se3, K, H, W, z_eps=1e-3, stride=4):
+def zbuffer_visible_all_views(X_struct, c2w_se3, K, H, W, z_eps=1e-3, stride=4,
+                              view_batch_size=8):
     """GPU z-buffer visibility, vectorized across ALL views at once: project
     every structure point into every view in one batched call, then resolve
     per-(view,pixel-bin) occlusion with a SINGLE `scatter_reduce_` over a
@@ -362,6 +398,20 @@ def zbuffer_visible_all_views(X_struct, c2w_se3, K, H, W, z_eps=1e-3, stride=4):
     """
     device = X_struct.device
     N = c2w_se3.shape[0]
+    # Bound temporary N*P projection tensors for scene-wide captures. Each
+    # view has an independent z-buffer, so batching preserves exact visibility.
+    if view_batch_size is not None and N > view_batch_size:
+        chunks = []
+        for start in range(0, N, view_batch_size):
+            vis = zbuffer_visible_all_views(
+                X_struct, c2w_se3[start:start + view_batch_size],
+                K[start:start + view_batch_size], H, W, z_eps, stride,
+                view_batch_size=None)
+            if vis is not None:
+                vis["v_idx"] += start
+                chunks.append(vis)
+        return ({key: torch.cat([c[key] for c in chunks]) for key in chunks[0]}
+                if chunks else None)
     P = X_struct.shape[0]
     Xw = X_struct[None].expand(N, P, 3)
     Xc = pp.SE3(c2w_se3)[:, None].Inv().Act(Xw)                     # (N,P,3)
@@ -389,12 +439,12 @@ def zbuffer_visible_all_views(X_struct, c2w_se3, K, H, W, z_eps=1e-3, stride=4):
     return {"v_idx": v_idx[is_min], "struct_idx": p_idx[is_min], "uv0": uv_m[is_min]}
 
 
-def refine_form_e(w2c_init, depth, K, images, *, voxel_length=0.02,
+def refine_structure(w2c_init, depth, K, images, *, voxel_length=0.02,
                    max_points_per_view=20000, pixel_stride=4, n_outer=3,
                    n_inner=5, huber_delta=1.5, z_eps=1e-3,
-                   dtype=torch.float64, verbose=True):
-    """Form E: joint photometric BA against a fixed fused structure,
-    rebuilt once per outer iteration."""
+                   dtype=torch.float64, verbose=True, history=None):
+    """Joint photometric refinement against a fixed fused structure, rebuilt
+    once per outer iteration."""
     device = depth.device
     N, H, W = depth.shape
     depth = depth.to(dtype)
@@ -410,14 +460,14 @@ def refine_form_e(w2c_init, depth, K, images, *, voxel_length=0.02,
                 c2w_se3.detach(), depth, gray, K, voxel_length, max_points_per_view, z_eps)
         if X_struct is None or X_struct.shape[0] < 8:
             if verbose:
-                print(f"[FormE] outer {outer}: fused structure too small, stop")
+                print(f"[structure] outer {outer}: fused structure too small, stop")
             break
 
         with torch.no_grad():
             vis = zbuffer_visible_all_views(X_struct, c2w_se3.detach(), K, H, W, z_eps, pixel_stride)
         if vis is None or vis["v_idx"].numel() == 0:
             if verbose:
-                print(f"[FormE] outer {outer}: no visible structure correspondences, stop")
+                print(f"[structure] outer {outer}: no visible structure correspondences, stop")
             break
 
         v_idx, struct_idx, uv0 = vis["v_idx"], vis["struct_idx"], vis["uv0"]
@@ -457,9 +507,14 @@ def refine_form_e(w2c_init, depth, K, images, *, voxel_length=0.02,
                     delta = huber_delta * rn.median().clamp(min=1e-9)
                     hw = (delta / rn.clamp(min=delta)).sqrt()[:, None]
                     inp["wgt"] = hw
+            opt.loss = opt.model.loss(inp, None)
             loss = opt.step(inp)
+            if history is not None:
+                with torch.no_grad():
+                    full_it = torch.cat([model.fixed0, model.pose_rest.data], dim=0)
+                    history.append(orthonormalize(affine_inv(pp.SE3(full_it).matrix())).to(dtype))
         if verbose:
-            print(f"[FormE] outer {outer}: {cat['v_idx'].numel()} corr, "
+            print(f"[structure] outer {outer}: {cat['v_idx'].numel()} corr, "
                   f"final loss {loss.item():.6f}", flush=True)
 
         full = torch.cat([model.fixed0, model.pose_rest.data], dim=0)

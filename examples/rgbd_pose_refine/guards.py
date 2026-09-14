@@ -2,10 +2,10 @@
 accept/reject guards. Ported from `da3/refine_poses.py`.
 
 These two guards are NOT part of Open3D's own RGB-D odometry / color-map
-tutorials -- they were added empirically after finding that unguarded
-photometric refinement regresses on a meaningful fraction of real scenes
-(textureless rooms, already-good poses with a small basin). Both hook into
-`run_refine.py` around the Form D/E optimization, not inside it.
+tutorials -- they exist because unguarded photometric refinement can regress
+on a meaningful fraction of real scenes (textureless rooms, already-good
+poses with a small basin). Both hook into `run_refine.py` around the
+refinement stages, not inside them.
 """
 from __future__ import annotations
 
@@ -17,10 +17,9 @@ from geometry import as_44, affine_inv, unproject_pixels, cam_to_world, world_to
 
 
 # --------------------------------------------------------------------------- #
-# Depth-induced correspondences (used by the trust-region pixel set, and by
-# Form D's coarse initial pair filtering -- NOT by the photometric residual
-# itself, which uses first-order linearization around a warp built with the
-# CURRENT pose estimate, see photometric.py).
+# Depth-induced correspondences (used by the trust-region pixel set -- NOT by
+# the photometric residual itself, which uses first-order linearization
+# around a warp built with the CURRENT pose estimate, see photometric.py).
 # --------------------------------------------------------------------------- #
 def conf_thresholds(conf: torch.Tensor, percentile: float = 40.0):
     """Per-view confidence threshold = `percentile`-th percentile of each

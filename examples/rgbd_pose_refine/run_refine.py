@@ -1,16 +1,17 @@
-"""CLI entry point for GPU-native RGB-D pose refinement (Forms D / E / D+E).
+"""CLI entry point for GPU-native RGB-D pose refinement.
 
 Mirrors `pgo.py`'s explicit-construction style: load a scene, run the fixed
-pipeline (self-calibration -> texture gate -> Form D/E/D+E -> trust-region
-accept/reject per stage), then report a pose-AUC before/after comparison
-against the COLMAP pseudo-GT. See README.md for the algorithm and a
-quickstart.
+pipeline (self-calibration -> texture gate -> odometry/structure refinement
+-> trust-region accept/reject per stage), then report a pose-AUC before/after
+comparison against the COLMAP pseudo-GT. See README.md for the algorithm and
+a quickstart.
 
 Example:
-    python examples/rgbd_pose_refine/run_refine.py --scene_id 7831862f02 --form D+E
+    python examples/rgbd_pose_refine/run_refine.py --scene_id 7831862f02 --stage odometry+structure
 """
 import argparse
 import os
+os.environ.setdefault('BAE_USE_PYPOSE_AMBIENT_GRAD', '1')
 import sys
 from pathlib import Path
 
@@ -27,7 +28,7 @@ from dataset import DEFAULT_DATASET_ROOT, DEFAULT_FRAMES_ROOT, DEFAULT_VIDEO_ROO
 from eval import evaluate_against_colmap
 from geometry import as_44
 from guards import texture_gate, trust_region_accept_reject
-from photometric import refine_form_d, refine_form_e
+from photometric import refine_odometry, refine_structure
 from selfcal import estimate_focal_selfcal
 
 DTYPE_CHOICES = {"float64": torch.float64, "float32": torch.float32}
@@ -46,16 +47,18 @@ def build_argparser():
     p.add_argument("--cache_root", type=str, default=None)
     p.add_argument("--max_views", type=int, default=60)
 
-    p.add_argument("--form", type=str, default="D+E", choices=["D", "E", "D+E"])
+    p.add_argument("--stage", type=str, default="odometry+structure",
+                    choices=["odometry", "structure", "odometry+structure"],
+                    help="which refinement stage(s) to run, in order")
     p.add_argument("--selfcal", dest="selfcal", action="store_true")
     p.add_argument("--no-selfcal", dest="selfcal", action="store_false")
     p.set_defaults(selfcal=True)
 
     p.add_argument("--tex-gate", type=float, default=0.003,
-                    help="Gradient-magnitude threshold. NOTE: resolution-dependent -- "
-                         "recalibrated for native ScanNet++ iPhone resolution (1920x1440); "
-                         "da3/refine_poses.py's 0.008 default was calibrated at DA3's much "
-                         "smaller model input resolution and is too strict here.")
+                    help="Gradient-magnitude threshold below which a scene is "
+                         "considered too textureless to refine. Resolution-dependent: "
+                         "recalibrate if you feed in images at a different resolution "
+                         "than native ScanNet++ iPhone (1920x1440).")
     p.add_argument("--tex-mode", type=str, default="covis", choices=["covis", "global"])
     p.add_argument("--reject-on-regression", dest="reject_on_regression", action="store_true")
     p.add_argument("--no-reject-on-regression", dest="reject_on_regression", action="store_false")
@@ -77,9 +80,9 @@ def build_argparser():
     p.add_argument("--n-samples", type=int, default=2048)
 
     p.add_argument("--voxel-length", type=float, default=0.02)
-    p.add_argument("--form-e-outer", type=int, default=3)
-    p.add_argument("--form-e-inner", type=int, default=5)
-    p.add_argument("--form-e-pixel-stride", type=int, default=4)
+    p.add_argument("--structure-outer", type=int, default=3)
+    p.add_argument("--structure-inner", type=int, default=5)
+    p.add_argument("--structure-pixel-stride", type=int, default=4)
 
     p.add_argument("--device", type=str, default="cuda", choices=["cuda", "cpu"])
     p.add_argument("--dtype", type=str, default="float64", choices=tuple(DTYPE_CHOICES.keys()))
@@ -127,21 +130,21 @@ def main(argv=None):
         w2c_final = w2c_init
     else:
         w2c_cur = w2c_init
-        for stage in args.form.split("+"):
-            if stage == "D":
-                w2c_next = refine_form_d(
+        for stage in args.stage.split("+"):
+            if stage == "odometry":
+                w2c_next = refine_odometry(
                     w2c_cur, depth, K_use, images, n_neighbors=args.n_neighbors,
                     min_baseline_frac=args.min_baseline_frac, min_rot_deg=args.min_rot_deg,
                     n_samples=args.n_samples, pyramid_levels=args.pyramid_levels,
                     n_relin=n_relin, n_inner=args.n_inner, huber_delta=args.huber_delta,
                     certain_boost=args.certain_boost, dtype=dtype)
-            elif stage == "E":
-                w2c_next = refine_form_e(
+            elif stage == "structure":
+                w2c_next = refine_structure(
                     w2c_cur, depth, K_use, images, voxel_length=args.voxel_length,
-                    pixel_stride=args.form_e_pixel_stride, n_outer=args.form_e_outer,
-                    n_inner=args.form_e_inner, huber_delta=args.huber_delta, dtype=dtype)
+                    pixel_stride=args.structure_pixel_stride, n_outer=args.structure_outer,
+                    n_inner=args.structure_inner, huber_delta=args.huber_delta, dtype=dtype)
             else:
-                raise ValueError(f"unknown form stage {stage!r}")
+                raise ValueError(f"unknown stage {stage!r}")
 
             if args.reject_on_regression:
                 w2c_next, accepted = trust_region_accept_reject(
@@ -153,11 +156,11 @@ def main(argv=None):
         w2c_final = w2c_cur
 
     auc_post = evaluate_against_colmap(w2c_final, scene["frame_names"], scene["gt_w2c"])
-    print(f"[run_refine] post-refinement ({args.form}) AUC: {auc_post}")
+    print(f"[run_refine] post-refinement ({args.stage}) AUC: {auc_post}")
     for k in sorted(set(auc_pre) & set(auc_post)):
         print(f"[run_refine] lift {k}: {auc_post[k] - auc_pre[k]:+.4f}")
 
-    out_path = args.out or str(EXAMPLE_DIR / "save" / f"{args.scene_id}_{args.form.replace('+', 'plus')}.pt")
+    out_path = args.out or str(EXAMPLE_DIR / "save" / f"{args.scene_id}_{args.stage.replace('+', 'plus')}.pt")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     torch.save({"w2c": as_44(w2c_final).detach().cpu(), "K": K_use.detach().cpu(),
                 "frame_names": scene["frame_names"], "args": vars(args),

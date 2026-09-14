@@ -1,7 +1,5 @@
 """ScanNet++ iPhone RGB-D loader for the raw official dataset layout at
-`/data/zitong/scannetpp_val` (NOT the DA3-BENCH preprocessed copy used by
-`da3/`'s own dataset code, which expects a different `merge_dslr_iphone`
-layout that isn't present in this raw download).
+`/data/zitong/scannetpp_val`.
 
 Per-scene sources (all confirmed by direct inspection of the raw dataset,
 see README):
@@ -24,9 +22,9 @@ see README):
     the COLMAP pseudo-GT on a few frames before trusting it broadly (see
     README "Known risks").
   - Pseudo-GT for evaluation: `<scene>/iphone/colmap.zip` ->
-    `colmap/{cameras,images}.txt`, standard COLMAP OPENCV-model text format,
-    parsed with the existing `depth_anything_3.utils.read_write_model`
-    utilities (not a new parser).
+    `colmap/images.txt`, the standard public COLMAP text-model format,
+    parsed with a small self-contained reader (`read_colmap_images_txt`
+    below).
 
 The two small zips (colmap, pose_intrinsic_imu) are fully extracted to a
 scratch directory, parsed, then deleted (`shutil.rmtree`); depth.zip is never
@@ -117,25 +115,42 @@ class _ScratchZip:
             shutil.rmtree(self.tmpdir, ignore_errors=True)
 
 
-def load_colmap_pseudo_gt(colmap_zip_path: str):
-    """Parse `iphone/colmap.zip` via the existing DA3 COLMAP text-model
-    reader. Returns {frame_name: (4,4) w2c float64 numpy}."""
-    import sys
-    da3_src = str(Path(__file__).resolve().parents[2] / "da3" / "src")
-    if da3_src not in sys.path:
-        sys.path.insert(0, da3_src)
-    from depth_anything_3.utils.read_write_model import read_images_text
+def qvec2rotmat(qvec) -> np.ndarray:
+    """COLMAP quaternion (qw, qx, qy, qz) -> (3,3) rotation matrix."""
+    qw, qx, qy, qz = qvec
+    return np.array([
+        [1 - 2 * qy ** 2 - 2 * qz ** 2, 2 * qx * qy - 2 * qz * qw, 2 * qx * qz + 2 * qy * qw],
+        [2 * qx * qy + 2 * qz * qw, 1 - 2 * qx ** 2 - 2 * qz ** 2, 2 * qy * qz - 2 * qx * qw],
+        [2 * qx * qz - 2 * qy * qw, 2 * qy * qz + 2 * qx * qw, 1 - 2 * qx ** 2 - 2 * qy ** 2],
+    ], dtype=np.float64)
 
-    with _ScratchZip(colmap_zip_path) as tmpdir:
-        images_txt = os.path.join(tmpdir, "colmap", "images.txt")
-        images = read_images_text(images_txt)
-        out = {}
-        for img in images.values():
-            ext = np.eye(4, dtype=np.float64)
-            ext[:3, :3] = img.qvec2rotmat()
-            ext[:3, 3] = img.tvec
-            out[img.name] = ext
+
+def read_colmap_images_txt(path: str):
+    """Minimal reader for COLMAP's public `images.txt` text-model format:
+    comment lines start with '#', then exactly two lines per registered
+    image (a pose line, then a POINTS2D line -- which is often BLANK, e.g.
+    whenever "mean observations per image" is 0, so blank lines must NOT be
+    filtered out before pairing or every record after the first shifts by
+    one line). Returns {image_name: (4,4) w2c float64}."""
+    with open(path) as f:
+        lines = [ln for ln in f if not ln.startswith("#")]
+    assert len(lines) % 2 == 0, "expected exactly 2 lines per registered image"
+    out = {}
+    for i in range(0, len(lines), 2):
+        parts = lines[i].split()
+        qw, qx, qy, qz, tx, ty, tz = (float(x) for x in parts[1:8])
+        name = parts[9]
+        w2c = np.eye(4, dtype=np.float64)
+        w2c[:3, :3] = qvec2rotmat((qw, qx, qy, qz))
+        w2c[:3, 3] = (tx, ty, tz)
+        out[name] = w2c
     return out
+
+
+def load_colmap_pseudo_gt(colmap_zip_path: str):
+    """Parse `iphone/colmap.zip`. Returns {frame_name: (4,4) w2c float64}."""
+    with _ScratchZip(colmap_zip_path) as tmpdir:
+        return read_colmap_images_txt(os.path.join(tmpdir, "colmap", "images.txt"))
 
 
 def load_pose_intrinsic_imu(zip_path: str):
@@ -202,13 +217,108 @@ def verify_arkit_convention(scene_dir: str, n_check: int = 5) -> float:
     return float((err_arkit - err_colmap).abs().mean())
 
 
+def estimate_gravity_up(depth: np.ndarray, K: np.ndarray, w2c: np.ndarray,
+                         n_samples_per_view: int = 4000, seed: int = 0):
+    """Empirically estimate which world direction is "up" (opposite gravity)
+    from the scene's own geometry, rather than assuming a fixed axis
+    convention: floors/ceilings/tabletops are the dominant near-horizontal
+    surfaces in an indoor RGB-D scan, so the most common world-space surface
+    normal direction (weighted majority vote over per-pixel local normals,
+    pooled across ALL views) is a robust proxy for the gravity axis.
+
+    This deliberately does NOT assume "ARKit is Y-up" carries through to
+    this dataset's stored pose convention -- checked empirically on several
+    ScanNet++ scenes this session, the dominant floor-normal axis came out
+    as world X (not Y), with sign varying per scene (consistent with each
+    scene's own session-relative device mounting) -- so this must be
+    computed per scene, not hardcoded.
+
+    Uses the FULL trajectory (caller should pass an unwindowed, reasonably
+    large `max_views` scene) even though ARKit position/yaw can drift badly
+    over a long trajectory: gravity/roll/pitch come from the phone's
+    accelerometer and do not accumulate drift the way position and heading
+    do, so pooling normals over the whole (possibly drifted) trajectory only
+    strengthens the gravity signal rather than corrupting it.
+
+    depth: (N,H,W) meters. K: (N,3,3). w2c: (N,4,4) or (N,3,4).
+    Returns (up (3,) float64 unit vector, confidence: fraction of sampled
+    normals within 20 degrees of the winning axis before refinement)."""
+    from geometry import as_44
+
+    w2c44 = as_44(torch.from_numpy(np.asarray(w2c))).numpy()
+    c2w = np.linalg.inv(w2c44)
+    N, H, W = depth.shape
+    rng = np.random.RandomState(seed)
+
+    normals_all, points_all = [], []
+    for v in range(N):
+        d = depth[v]
+        fx, fy, cx, cy = K[v, 0, 0], K[v, 1, 1], K[v, 0, 2], K[v, 1, 2]
+        ys, xs = np.mgrid[0:H, 0:W]
+        valid = d > 1e-3
+        Xc = np.empty((H, W, 3))
+        Xc[..., 0] = (xs + 0.5 - cx) / fx * d
+        Xc[..., 1] = (ys + 0.5 - cy) / fy * d
+        Xc[..., 2] = d
+        dx = Xc[1:-1, 2:] - Xc[1:-1, :-2]
+        dy = Xc[2:, 1:-1] - Xc[:-2, 1:-1]
+        n = np.cross(dx, dy)
+        norm = np.linalg.norm(n, axis=-1, keepdims=True)
+        ok = (norm[..., 0] > 1e-6) & valid[1:-1, 1:-1]
+        n = n / np.clip(norm, 1e-9, None)
+        n_valid = n[ok]
+        p_valid = Xc[1:-1, 1:-1][ok]
+        if len(n_valid) == 0:
+            continue
+        if len(n_valid) > n_samples_per_view:
+            idx = rng.choice(len(n_valid), n_samples_per_view, replace=False)
+            n_valid, p_valid = n_valid[idx], p_valid[idx]
+        R, t = c2w[v, :3, :3], c2w[v, :3, 3]
+        normals_all.append((R @ n_valid.T).T)
+        points_all.append((R @ p_valid.T).T + t)
+
+    if not normals_all:
+        return np.array([0.0, 1.0, 0.0]), 0.0
+    normals = np.concatenate(normals_all, axis=0)
+    points = np.concatenate(points_all, axis=0)
+
+    # Structure-tensor (2nd-moment) approach: sum(n n^T)'s dominant eigenvector
+    # is the most common surface-normal direction, robust to the natural
+    # sign ambiguity of a normal (n and -n describe the same plane) without
+    # needing to bin into signed candidate axes first -- and it is not
+    # snapped to any canonical axis, so it captures a true gravity direction
+    # even when the world frame isn't axis-aligned with XYZ.
+    M = normals.T @ normals / len(normals)
+    eigvals, eigvecs = np.linalg.eigh(M)
+    axis = eigvecs[:, -1]
+    confidence = float(eigvals[-1] / eigvals.sum())
+
+    # Sign is still ambiguous (eigenvectors have no sign) -- resolve it using
+    # the actual geometry: the dominant plane (usually the floor) should sit
+    # BELOW the cameras that observed it, so "up" points from that plane's
+    # world position toward the mean camera position.
+    near = np.abs(normals @ axis) > np.cos(np.radians(30))
+    plane_centroid = points[near].mean(axis=0) if near.any() else points.mean(axis=0)
+    camera_centroid = c2w[:, :3, 3].mean(axis=0)
+    if float((camera_centroid - plane_centroid) @ axis) < 0:
+        axis = -axis
+    return axis, confidence
+
+
 def load_scene(scene_id: str, *, dataset_root: str = DEFAULT_DATASET_ROOT,
                frames_root: str = DEFAULT_FRAMES_ROOT,
                video_root: str = DEFAULT_VIDEO_ROOT,
                cache_root: str = None, max_views: int = 60,
+               frame_window: tuple[float, float] | None = None,
                force_reload: bool = False):
     """Load one scene's RGB, depth, initial pose+K, and COLMAP pseudo-GT
     (for whichever frames it registered), from the raw ScanNet++ layout.
+
+    frame_window: optional (start_frac, end_frac) in [0,1], restricting the
+    `max_views`-sample linspace to that sub-range of the pre-extracted frame
+    list -- e.g. (0.1, 0.3) samples only from the first 10-30% of the scan,
+    giving views of one local area rather than spanning the whole scene.
+    Defaults to None (the full range, i.e. the original whole-scan behavior).
 
     Returns a dict: images (N,H,W,3) uint8, depth (N,H,W) float32 meters,
     K_init (N,3,3) float64, w2c_init (N,4,4) float64, frame_names (N,) list,
@@ -217,7 +327,8 @@ def load_scene(scene_id: str, *, dataset_root: str = DEFAULT_DATASET_ROOT,
     if cache_root is None:
         cache_root = str(Path(tempfile.gettempdir()) / "rgbd_pose_refine_cache")
     os.makedirs(cache_root, exist_ok=True)
-    cache_path = os.path.join(cache_root, f"{scene_id}_mv{max_views}.pt")
+    window_tag = f"_w{frame_window[0]:.2f}-{frame_window[1]:.2f}" if frame_window else ""
+    cache_path = os.path.join(cache_root, f"{scene_id}_mv{max_views}{window_tag}.pt")
     if os.path.exists(cache_path) and not force_reload:
         return torch.load(cache_path, weights_only=False)
 
@@ -228,6 +339,10 @@ def load_scene(scene_id: str, *, dataset_root: str = DEFAULT_DATASET_ROOT,
     if os.path.isdir(frame_dir):
         names = sorted(f for f in os.listdir(frame_dir) if f.endswith(".jpg"))
         indices = [_frame_idx_from_name(n) for n in names]
+        if frame_window is not None:
+            lo = int(frame_window[0] * (len(indices) - 1))
+            hi = int(frame_window[1] * (len(indices) - 1))
+            names, indices = names[lo:hi + 1], indices[lo:hi + 1]
         if max_views and len(indices) > max_views:
             sel = np.linspace(0, len(indices) - 1, max_views).round().astype(int)
             sel = sorted(set(sel.tolist()))

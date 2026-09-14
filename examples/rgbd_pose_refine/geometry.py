@@ -1,9 +1,7 @@
-"""Pure-tensor pinhole camera math shared by Form D and Form E.
+"""Pure-tensor pinhole camera math shared by the odometry and structure
+refinement stages.
 
-Ported from the research script `da3/refine_poses.py` (functions of the same
-name), which validated these exact conventions against Open3D's RGB-D
-odometry / color-map-optimization tutorials on real ScanNet++ data. Kept
-dependency-free (no `bae`/`pypose` import) so it can be unit-tested in
+Kept dependency-free (no `bae`/`pypose` import) so it can be unit-tested in
 isolation and reused by both the correspondence-building code (plain tensors,
 outside any `@psjac` trace) and the synthetic test.
 
@@ -150,21 +148,24 @@ def image_gradients(gray: torch.Tensor):
     are interior, since covisible-pair correspondences rarely land on the
     image border).
 
-    This generalizes `_grad_mag_maps` from `da3/refine_poses.py` (which only
-    returns the magnitude `0.5*(|gx|+|gy|)`) to signed partials, since Form D's
-    first-order photometric linearization needs signed gx, gy, not magnitude.
+    Returns signed partials rather than just the gradient magnitude, since
+    the odometry stage's first-order photometric linearization needs signed
+    gx, gy (see `grad_mag` below for the magnitude-only variant used for
+    texture-biased pixel sampling).
     """
     gx = torch.zeros_like(gray)
     gy = torch.zeros_like(gray)
-    gx[:, :, :-1] = gray[:, :, 1:] - gray[:, :, :-1]
-    gx[:, :, -1] = gx[:, :, -2]
-    gy[:, :-1, :] = gray[:, 1:, :] - gray[:, :-1, :]
-    gy[:, -1, :] = gy[:, -2, :]
+    gx[:, :, 1:-1] = (gray[:, :, 2:] - gray[:, :, :-2]) * 0.5
+    gx[:, :, 0] = gray[:, :, 1] - gray[:, :, 0]
+    gx[:, :, -1] = gray[:, :, -1] - gray[:, :, -2]
+    gy[:, 1:-1, :] = (gray[:, 2:, :] - gray[:, :-2, :]) * 0.5
+    gy[:, 0, :] = gray[:, 1, :] - gray[:, 0, :]
+    gy[:, -1, :] = gray[:, -1, :] - gray[:, -2, :]
     return gx, gy
 
 
 def grad_mag(gray: torch.Tensor) -> torch.Tensor:
-    """Mean-abs-gradient magnitude map, matching `_grad_mag_maps`'s definition
-    (0.5*(|gx|+|gy|)) exactly, for texture-gate/sampling-bias reuse."""
+    """Mean-abs-gradient magnitude map (0.5*(|gx|+|gy|)), used for both the
+    texture gate and texture-biased pixel sampling."""
     gx, gy = image_gradients(gray)
     return 0.5 * (gx.abs() + gy.abs())
