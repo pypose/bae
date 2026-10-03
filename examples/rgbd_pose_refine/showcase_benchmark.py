@@ -20,13 +20,11 @@ import torch
 import cv2
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT/'da3'))
 from geometry import as_44
 from eval import pair_errors, error_auc
 from photometric import refine_odometry, refine_structure
 from selfcal import estimate_focal_selfcal
 from guards import trust_region_accept_reject
-import refine_poses as reference
 
 
 def metrics(w2c, gt):
@@ -38,6 +36,15 @@ def metrics(w2c, gt):
 
 
 def benchmark(args, scene):
+    if any(name in ('form_d', 'form_e', 'form_de') for name in args.variants):
+        sys.path.insert(0, str(ROOT/'da3'))
+        try:
+            import refine_poses as reference
+        except ImportError as exc:
+            raise ImportError(
+                'Reference variants require da3/refine_poses.py and its dependencies. '
+                'For BAE-only refinement, use --variants bae_d bae_e bae_de.'
+            ) from exc
     out = args.out/scene
     data = np.load(out/'prediction.npz')
     device = f'cuda:{args.device}'
@@ -146,7 +153,8 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--scenes', nargs='+', default=['7831862f02'])
     p.add_argument('--out', type=Path, default=Path('outputs/rgbd_showcase'))
-    p.add_argument('--variants', nargs='+', default=['bae_d','bae_e','bae_de','form_d','form_e','form_de'])
+    p.add_argument('--variants', nargs='+', default=['bae_d','bae_e','bae_de','form_d','form_e','form_de'],
+                   help='Variants to run; use bae_d bae_e bae_de to skip the DA3 reference implementations')
     p.add_argument('--device', type=int, default=0)
     p.add_argument('--seed', type=int, default=0)
     p.add_argument('--neighbors', type=int, default=16)

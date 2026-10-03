@@ -165,6 +165,10 @@ python examples/rgbd_pose_refine/showcase_prepare.py \
 OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_benchmark.py \
   --scenes 3f15a9266d 0d2ee665be --device 0
 
+# Alternatively, run only BAE on cached predictions, without da3/refine_poses.py.
+OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_benchmark.py \
+  --scenes 3f15a9266d 0d2ee665be --device 0 --variants bae_d bae_e bae_de
+
 # Render the office, including every optimizer state and raw formulation atlas.
 OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_render.py \
   --scene 3f15a9266d --variant bae_de_raw --view 68 \
