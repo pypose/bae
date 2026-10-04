@@ -7,7 +7,7 @@ from packaging.version import Version
 from setuptools import setup, find_packages
 from torch.utils.cpp_extension import CUDAExtension, BuildExtension
 
-VERSION = "0.2.5"
+VERSION = "0.2.6"
 SUPPORTED_CUDSS_SPECIFIER = SpecifierSet("<0.9")
 
 def readme():
