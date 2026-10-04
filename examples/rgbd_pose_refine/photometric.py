@@ -236,8 +236,7 @@ def refine_odometry(w2c_init, depth, K, images, *, n_neighbors=16,
     images: (N,H,W,3) uint8. Returns refined w2c (N,3,4) on depth's device.
 
     history: optional list; if given, the current w2c is appended to it after
-    every inner LM step (purely for diagnostics/visualization, e.g.
-    `showcase_render.py` -- has no effect on the optimization itself).
+    every inner LM step for diagnostics; it does not affect the optimization.
     """
     assert len(n_relin) == pyramid_levels, "n_relin must have one entry per pyramid level"
     device = depth.device

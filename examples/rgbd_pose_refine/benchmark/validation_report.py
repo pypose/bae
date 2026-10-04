@@ -204,7 +204,7 @@ def report(root, dest, device):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=Path, default=Path('outputs/rgbd_validation_giant11'))
-    p.add_argument('--dest', type=Path, default=HERE.parent/'docs/validation')
+    p.add_argument('--dest', type=Path, default=Path('outputs/rgbd_validation_report'))
     p.add_argument('--device', default='cuda:0')
     a = p.parse_args()
     report(a.root, a.dest, a.device)

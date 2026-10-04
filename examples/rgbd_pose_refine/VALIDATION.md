@@ -30,7 +30,7 @@ its state. Each scene has its own `run.log`, prediction, input metadata, raw
 and guarded optimizer poses, and metrics. Rerunning the command resumes the
 same configuration; it does not count failures as successful scenes.
 
-The [validation report](docs/validation/RESULTS.md) uses the original DA3
+The generated report in `outputs/rgbd_validation_report/` uses the original DA3
 evaluator to rescore every method on identical unordered camera pairs. It
 reports both macro AUC (equal scene weight) and pooled AUC (equal pair weight),
 per-scene results, native/reference gaps, and differences between the example
@@ -48,11 +48,7 @@ os.environ.setdefault('BAE_USE_PYPOSE_AMBIENT_GRAD', '1')
 `photometric.py` also installs the enabled patch when bae was imported earlier.
 The validation runner rejects an explicitly disabled setting. This is required
 for correct derivatives of composed PyPose Lie operations and their conversion
-to the optimizer's local SE(3) update. The original visual demonstration was
-created without this setting and retains its original nested-model checkpoint
-and inputs. Its AUCs describe that run; use the GIANT-1.1 validation report for
-complete split claims. The corrected gradient setting alone left native D's
-AUC essentially unchanged on the two cached GIANT-1.1 control scenes.
+to the optimizer's local SE(3) update.
 
 Checks include nonidentity composed-pose sparse Jacobians against finite
 differences, synthetic RGBD convergence, Lie-operation ambient gradients, and

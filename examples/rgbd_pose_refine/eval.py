@@ -38,29 +38,6 @@ def error_auc(errors: np.ndarray, thresholds=(5, 10, 20, 30)) -> dict:
     return aucs
 
 
-def pair_errors_numpy(pred_w2c: np.ndarray, gt_w2c: np.ndarray) -> np.ndarray:
-    """NumPy counterpart of `pair_errors` for CPU-only rendering.
-
-    This avoids the CPU Torch acos kernel that failed on large evaluation
-    arrays in the showcase environment. Both backends share `error_auc`.
-    Inputs are (N, 4, 4) world-to-camera matrices.
-    """
-    pred_w2c = np.asarray(pred_w2c, dtype=np.float64)
-    gt_w2c = np.asarray(gt_w2c, dtype=np.float64)
-    i, j = np.triu_indices(len(pred_w2c), 1)
-    rel_pred = pred_w2c[i] @ np.linalg.inv(pred_w2c)[j]
-    rel_gt = gt_w2c[i] @ np.linalg.inv(gt_w2c)[j]
-    rotation = np.swapaxes(rel_pred[:, :3, :3], 1, 2) @ rel_gt[:, :3, :3]
-    cos_r = (np.trace(rotation, axis1=1, axis2=2) - 1) / 2
-    rot_error = np.rad2deg(np.arccos(np.clip(cos_r, -1, 1)))
-    t_pred, t_gt = rel_pred[:, :3, 3], rel_gt[:, :3, 3]
-    t_pred = t_pred / np.maximum(np.linalg.norm(t_pred, axis=1, keepdims=True), 1e-8)
-    t_gt = t_gt / np.maximum(np.linalg.norm(t_gt, axis=1, keepdims=True), 1e-8)
-    cos_t = np.abs((t_pred * t_gt).sum(1))
-    trans_error = np.rad2deg(np.arccos(np.clip(cos_t, -1, 1)))
-    return np.maximum(rot_error, trans_error)
-
-
 def pair_errors(pred_w2c: torch.Tensor, gt_w2c: torch.Tensor) -> np.ndarray:
     """All-pairs max(rotation_err_deg, translation_err_deg) between predicted
     and ground-truth poses for one scene. pred_w2c, gt_w2c: (N,4,4)."""
