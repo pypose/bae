@@ -11,8 +11,8 @@ python -c "from depth_anything_3.api import DepthAnything3; DepthAnything3.from_
 Run all 50 scenes from the mounted `nvs_sem_val.txt` split:
 
 ```bash
-python examples/rgbd_pose_refine/validate_split.py
-python examples/rgbd_pose_refine/validation_report.py
+python examples/rgbd_pose_refine/benchmark/validate_split.py
+python examples/rgbd_pose_refine/benchmark/validation_report.py
 ```
 
 The runner uses both 24 GB RTX 4090 GPUs, with one isolated scene worker per GPU.

@@ -63,7 +63,6 @@ def build_argparser():
     p.add_argument("--reject-on-regression", dest="reject_on_regression", action="store_true")
     p.add_argument("--no-reject-on-regression", dest="reject_on_regression", action="store_false")
     p.set_defaults(reject_on_regression=True)
-    p.add_argument("--trust-pairs", type=str, default="wide", choices=["wide"])
     p.add_argument("--trust-n-pairs", type=int, default=4096)
     p.add_argument("--trust-min-rot", type=float, default=20.0)
     p.add_argument("--trust-seed", type=int, default=0)
@@ -149,7 +148,7 @@ def main(argv=None):
             if args.reject_on_regression:
                 w2c_next, accepted = trust_region_accept_reject(
                     as_44(w2c_cur), as_44(w2c_next), depth, conf, K_use, images,
-                    trust_pairs=args.trust_pairs, trust_n_pairs=args.trust_n_pairs,
+                    trust_n_pairs=args.trust_n_pairs,
                     trust_min_rot=args.trust_min_rot, trust_seed=args.trust_seed,
                     stage_name=stage)
             w2c_cur = w2c_next

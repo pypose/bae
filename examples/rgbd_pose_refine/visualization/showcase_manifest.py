@@ -1,6 +1,5 @@
 """Measured metadata and a fixed-alignment camera trajectory for the gallery."""
 import json
-from pathlib import Path
 import numpy as np
 from showcase_render import homogeneous
 

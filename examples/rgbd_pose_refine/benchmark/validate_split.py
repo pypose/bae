@@ -19,7 +19,7 @@ import time
 os.environ.setdefault('BAE_USE_PYPOSE_AMBIENT_GRAD', '1')
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parents[1]
+ROOT = HERE.parents[2]
 VARIANTS = ['bae_d', 'bae_e', 'bae_de', 'form_d', 'form_e', 'form_de']
 
 

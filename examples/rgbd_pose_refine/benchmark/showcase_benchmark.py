@@ -18,8 +18,9 @@ import time
 import numpy as np
 import torch
 import cv2
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from geometry import as_44
 from eval import pair_errors, error_auc
 from photometric import refine_odometry, refine_structure

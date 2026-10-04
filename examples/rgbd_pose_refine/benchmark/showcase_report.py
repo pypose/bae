@@ -1,5 +1,5 @@
 """Collect every measured scene, including regressions and unrendered scenes."""
-import argparse,csv,json,shutil
+import argparse,csv,json
 from pathlib import Path
 
 

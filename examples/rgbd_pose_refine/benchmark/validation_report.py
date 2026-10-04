@@ -10,7 +10,8 @@ import numpy as np
 import torch
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[1]/'da3'))
+sys.path.insert(0, str(HERE.parents[2]/'da3'))
+sys.path.insert(0, str(HERE.parent))
 from eval_pose_auc_scannetpp import build_pairs, pair_errors_idx, error_auc
 from eval import pair_errors as native_pair_errors
 from dslr import list_dslr_frames
@@ -117,7 +118,7 @@ def report(root, dest, device):
                            for v in m['native_metric_delta'].values()), default=0)
     max_precision_delta = max((abs(v) for r in records for m in r['variants'].values()
                               for v in m['float64_minus_float32_auc'].values()), default=0)
-    historical_path = HERE.parents[1]/'da3/da3_pose_auc_nvs_test_GIANT11.json'
+    historical_path = HERE.parents[2]/'da3/da3_pose_auc_nvs_test_GIANT11.json'
     historical = json.loads(historical_path.read_text())
     historical_comparison = dict(path=str(historical_path), split=historical['split'],
         macro_auc=historical['macro_auc'], shared_scenes=sorted(set(scenes)&set(historical['per_scene'])),
@@ -203,7 +204,7 @@ def report(root, dest, device):
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=Path, default=Path('outputs/rgbd_validation_giant11'))
-    p.add_argument('--dest', type=Path, default=HERE/'docs/validation')
+    p.add_argument('--dest', type=Path, default=HERE.parent/'docs/validation')
     p.add_argument('--device', default='cuda:0')
     a = p.parse_args()
     report(a.root, a.dest, a.device)

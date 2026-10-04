@@ -46,14 +46,14 @@ records every moving render camera, selected solver state and excluded view.
 Rebuild these artifacts from the completed validation caches:
 
 ```bash
-python examples/rgbd_pose_refine/showcase_render.py --out outputs/rgbd_validation_giant11 \
+python examples/rgbd_pose_refine/visualization/showcase_render.py --out outputs/rgbd_validation_giant11 \
   --scene c50d2d1d42 --variant bae_de_raw --view 40 --width 1200 --height 900 --video --history-stride 1
-python examples/rgbd_pose_refine/showcase_render.py --out outputs/rgbd_validation_giant11 \
+python examples/rgbd_pose_refine/visualization/showcase_render.py --out outputs/rgbd_validation_giant11 \
   --scene 38d58a7a31 --variant bae_de_raw --view 16 --width 1200 --height 900 --video --history-stride 1
-python examples/rgbd_pose_refine/showcase_render.py --out outputs/rgbd_validation_giant11 \
+python examples/rgbd_pose_refine/visualization/showcase_render.py --out outputs/rgbd_validation_giant11 \
   --scene 40aec5fffa --variant bae_de_raw --view 48 --width 1200 --height 900 --video --history-stride 1
-python examples/rgbd_pose_refine/showcase_stories.py
-python examples/rgbd_pose_refine/showcase_gallery.py \
+python examples/rgbd_pose_refine/visualization/showcase_stories.py
+python examples/rgbd_pose_refine/visualization/showcase_gallery.py \
   outputs/rgbd_validation_giant11/c50d2d1d42 \
   outputs/rgbd_validation_giant11/38d58a7a31 \
   outputs/rgbd_validation_giant11/40aec5fffa \
@@ -158,33 +158,33 @@ is only imported by DA3's unused export modules; MP4 encoding here uses imageio.
 ```bash
 # Prepare on an idle GPU. --scenes all processes all mounted DSLR scenes.
 OMP_NUM_THREADS=8 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-python examples/rgbd_pose_refine/showcase_prepare.py \
+python examples/rgbd_pose_refine/benchmark/showcase_prepare.py \
   --scenes 3f15a9266d 0d2ee665be --max-views 192 --device 0
 
 # All native and actual Open3D reference formulations, with cached progress.
-OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_benchmark.py \
+OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/benchmark/showcase_benchmark.py \
   --scenes 3f15a9266d 0d2ee665be --device 0
 
 # Alternatively, run only BAE on cached predictions, without da3/refine_poses.py.
-OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_benchmark.py \
+OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/benchmark/showcase_benchmark.py \
   --scenes 3f15a9266d 0d2ee665be --device 0 --variants bae_d bae_e bae_de
 
 # Render the office, including every optimizer state and raw formulation atlas.
-OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_render.py \
+OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/visualization/showcase_render.py \
   --scene 3f15a9266d --variant bae_de_raw --view 68 \
   --renderer textured --video --history-stride 1
-OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/showcase_render.py \
+OMP_NUM_THREADS=8 python examples/rgbd_pose_refine/visualization/showcase_render.py \
   --scene 0d2ee665be --variant bae_de_raw --view 66 \
   --renderer textured --video --history-stride 1
 
-python examples/rgbd_pose_refine/showcase_gallery.py \
+python examples/rgbd_pose_refine/visualization/showcase_gallery.py \
   outputs/rgbd_showcase/3f15a9266d outputs/rgbd_showcase/0d2ee665be
 
 # Re-run the checkpoint used in the earlier DA3 experiments in a separate cache.
-python examples/rgbd_pose_refine/showcase_prepare.py \
+python examples/rgbd_pose_refine/benchmark/showcase_prepare.py \
   --scenes 7831862f02 3f15a9266d --model depth-anything/DA3-GIANT-1.1 \
   --out outputs/rgbd_showcase_giant11 --max-views 192
-python examples/rgbd_pose_refine/showcase_benchmark.py \
+python examples/rgbd_pose_refine/benchmark/showcase_benchmark.py \
   --scenes 7831862f02 3f15a9266d --out outputs/rgbd_showcase_giant11
 
 python -m pytest examples/rgbd_pose_refine/tests/ -q

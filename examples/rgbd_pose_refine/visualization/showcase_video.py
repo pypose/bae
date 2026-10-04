@@ -3,17 +3,12 @@ import numpy as np
 from PIL import Image,ImageDraw
 from showcase_render import BG,font,homogeneous
 from showcase_manifest import camera_plot
+from eval import error_auc, pair_errors_numpy
 
 
-def pose_auc(w,gt):
-    w=homogeneous(w);gt=homogeneous(gt);i,j=np.triu_indices(len(w),1)
-    rel=w[i]@np.linalg.inv(w)[j];truth=gt[i]@np.linalg.inv(gt)[j]
-    rotation=np.swapaxes(rel[:,:3,:3],1,2)@truth[:,:3,:3]
-    r=np.rad2deg(np.arccos(np.clip((np.trace(rotation,axis1=1,axis2=2)-1)/2,-1,1)))
-    a,b=rel[:,:3,3],truth[:,:3,3];a/=np.maximum(np.linalg.norm(a,axis=1,keepdims=True),1e-8);b/=np.maximum(np.linalg.norm(b,axis=1,keepdims=True),1e-8)
-    t=np.rad2deg(np.arccos(np.clip(np.abs((a*b).sum(1)),-1,1)));error=np.sort(np.maximum(r,t))
-    e=np.r_[0,error];recall=np.r_[0,(np.arange(len(error))+1)/len(error)];n=np.searchsorted(e,5)
-    return np.trapz(np.r_[recall[:n],recall[n-1]],np.r_[e[:n],5])/5*100
+def pose_auc(w, gt):
+    errors = pair_errors_numpy(homogeneous(w), homogeneous(gt))
+    return error_auc(errors, thresholds=(5,))["auc@5"] * 100
 
 
 class VideoPanel:

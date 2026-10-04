@@ -11,8 +11,10 @@ import json
 import os
 from pathlib import Path
 import time
+import sys
 import numpy as np
 import torch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from dslr import list_dslr_frames, load_dslr_scene
 
 

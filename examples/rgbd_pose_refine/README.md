@@ -38,12 +38,10 @@ poses in two stages, both implemented as native `bae` sparse-LM problems
 2. **Structure** — fuses the current views into a single point cloud, then
    refines every pose against that shared structure.
 
-A cheap, pose/depth-free self-calibration step corrects small camera-intrinsics
-errors before either stage runs (dense photometric refinement is sensitive
-to focal-length error, and this is close to free insurance against it). Two
-guards — a texture check and a trust-region accept/reject — keep the
-refinement from making things worse on scenes that don't support it (e.g.
-blank walls, or already-good poses).
+An optional, pose/depth-free self-calibration step corrects camera intrinsics
+before refinement. The iPhone CLI also checks texture and rejects each stage
+if it worsens a held-out photometric score. That score is a proxy: acceptance
+does not guarantee better ground-truth pose accuracy.
 
 Everything (correspondence search, structure fusion, visibility resolution)
 is implemented as batched GPU tensor ops — see the module docstrings in
@@ -62,23 +60,49 @@ The DSLR showcase dependencies and rendering commands are documented in
 
 ## Quickstart
 
+Choose the path matching your inputs. All commands run from the repository root.
+
+| Entry point | Inputs | Refinement and guard behavior |
+|---|---|---|
+| `run_refine.py` | iPhone RGB-D, LiDAR depth, ARKit initial poses | Texture gate; guard after each stage; structure starts from the accepted odometry result |
+| `benchmark/showcase_prepare.py` → `benchmark/showcase_benchmark.py` | DSLR photographs → cached DA3 depth and poses | Raw D then E; guard the complete proposal; save both raw and guarded results |
+| `space/` (optional hosted app) | Uploaded photographs or cached examples | Display raw D/E history and report a guard verdict using the plotted held-out scores |
+
+The images above come from the **DSLR benchmark**, whose defaults use 512
+samples per pair and baseline/rotation gates of 0.1/1°. The iPhone CLI uses
+2,048 samples and gates of 0/0°. Both call the same refinement functions.
+
 ```bash
 # Sanity-check the math/API first (fast, no dataset needed):
 pytest examples/rgbd_pose_refine/tests/
 
-# Run on a real ScanNet++ scene:
-python examples/rgbd_pose_refine/run_refine.py --scene_id 7831862f02 --stage odometry+structure
+# iPhone RGB-D refinement; replace the paths with your dataset locations.
+python examples/rgbd_pose_refine/run_refine.py \
+  --scene_id 7831862f02 --stage odometry+structure \
+  --dataset_root /path/to/scannetpp \
+  --frames_root /path/to/iphone_frames --video_root /path/to/iphone_videos
+
+# BAE-only DSLR refinement, after preparing prediction.npz for this scene.
+python examples/rgbd_pose_refine/benchmark/showcase_benchmark.py \
+  --scenes 7831862f02 --variants bae_d bae_e bae_de
 ```
 
-The CLI prints a self-calibration line, a texture-gate verdict, per-step LM
+See [SHOWCASE.md](SHOWCASE.md) for DSLR prediction preparation and rendering,
+or [VALIDATION.md](VALIDATION.md) for the full split protocol. Cached-prediction
+BAE runs need no reference implementation; requesting `form_d`, `form_e`, or
+`form_de` requires the separate `da3/refine_poses.py` checkout and dependencies.
+
+The iPhone CLI prints a self-calibration line, a texture-gate verdict, per-step LM
 loss, an accept/reject verdict per stage, and a pose-accuracy comparison
 before/after, then saves the refined poses to `examples/rgbd_pose_refine/save/`.
 
 ## Dataset
 
-Expects ScanNet++'s iPhone RGB-D captures (real LiDAR depth + IMU-based
+The iPhone CLI expects ScanNet++ RGB-D captures (real LiDAR depth + IMU-based
 initial pose/intrinsics). See `dataset.py` for the exact expected layout and
 `--dataset_root`/`--frames_root`/`--video_root` to point at your own copy.
+The DSLR benchmark uses `dslr.py` to read undistorted photographs and COLMAP
+evaluation poses; DA3 supplies its initial depth, intrinsics, and poses.
 
 ## Files
 
@@ -90,11 +114,16 @@ initial pose/intrinsics). See `dataset.py` for the exact expected layout and
 | `guards.py` | Texture gate + trust-region accept/reject |
 | `photometric.py` | The two refinement stages (odometry, structure) |
 | `dataset.py` | ScanNet++ iPhone data loader |
+| `dslr.py` | ScanNet++ DSLR loader and undistortion |
 | `eval.py` | Pose-accuracy evaluation against ground truth |
 | `tests/_scene_fixture.py` | Textured-plane fixture for numerical correctness tests |
-| `run_refine.py` | CLI entry point |
+| `run_refine.py` | iPhone CLI entry point |
+| [`benchmark/`](benchmark/README.md) | Prediction preparation, comparisons, split validation, reports |
+| [`visualization/`](visualization/README.md) | Rendering, videos, tours, and gallery generation |
+| `space/` | Optional hosted app and its deployment scripts; vendor copies are generated |
+| `docs/` | Published galleries and validation artifacts; not imported by the solver |
 
-## CLI reference
+## iPhone CLI reference
 
 | Flag | Default | Meaning |
 |---|---|---|

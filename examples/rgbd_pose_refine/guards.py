@@ -243,42 +243,62 @@ def photo_resid_penalized(w2c, src, K, gray, H, W, z_eps=1e-3):
     return score, n_in / n_tot
 
 
-def trust_region_accept_reject(w2c_before, w2c_after, depth, conf, K, images,
-                                *, trust_pairs="wide", trust_n_pairs=4096,
-                                trust_min_rot=20.0, trust_seed=0,
-                                stage_name="stage", verbose=True):
-    """Score a FIXED held-out photometric objective before vs after a
-    refinement stage; reject (revert to `w2c_before`) if the score got worse.
+def score_pose_history(w2c_states, depth, conf, K, images, *, n_pairs=4096,
+                       n_samples=2048, min_rot_deg=20.0, seed=0):
+    """Score all states against one pixel set drawn from the initial poses.
 
-    `trust_pairs="wide"` (default) is recommended over `"covis"`: the
-    optimizer's own covisibility neighbor list is circular for this purpose
-    (measured: on 7/7 destroyed scenes the covis residual improved while
-    accuracy fell -- the guard would have accepted every one).
+    Returns an (S, 2) NumPy array of (residual, support fraction), or None
+    when no held-out pixels survive. Reuse these scores for both plotting
+    and acceptance so the displayed curve explains the guard's decision.
     """
     device = depth.device
     H, W = depth.shape[-2:]
     gray = torch.from_numpy(images.astype(np.float32).mean(-1) / 255.0).to(device).double()
     Kd = K.double()
-
-    if trust_pairs == "wide":
-        pairs = wide_pairs(w2c_before, n_pairs=trust_n_pairs,
-                            min_rot_deg=trust_min_rot, seed=trust_seed)
-    else:
-        pairs = None  # caller passes a covis graph via src below in that case
-
-    src = induce_correspondences(w2c_before, depth, conf, Kd, pairs,
-                                  n_samples=2048) if pairs is not None else None
+    initial = torch.as_tensor(w2c_states[0], device=device, dtype=torch.float64)
+    pairs = wide_pairs(initial, n_pairs=n_pairs, min_rot_deg=min_rot_deg, seed=seed)
+    src = induce_correspondences(initial, depth, conf, Kd, pairs, n_samples=n_samples)
     if src is None or src["i_idx"].numel() == 0:
+        return None
+    return np.asarray([
+        photo_resid_penalized(torch.as_tensor(w, device=device, dtype=torch.float64),
+                              src, Kd, gray, H, W)
+        for w in w2c_states
+    ], dtype=np.float64)
+
+
+def accept_held_out_scores(scores, *, stage_name="stage", verbose=True):
+    """Accept when the last state's residual is no worse than the first's.
+
+    Preserve the existing guard's accept-by-default policy for an empty
+    held-out set; no numerical scores are fabricated in that case.
+    """
+    if scores is None:
         if verbose:
             print(f"[trust-region:{stage_name}] no held-out pixel set, accepting by default")
-        return w2c_after, True
+        return True
 
-    score_before, sup_before = photo_resid_penalized(w2c_before, src, Kd, gray, H, W)
-    score_after, sup_after = photo_resid_penalized(w2c_after, src, Kd, gray, H, W)
-    accept = score_after <= score_before
+    score_before, sup_before = scores[0]
+    score_after, sup_after = scores[-1]
+    accept = bool(score_after <= score_before)
     if verbose:
         verdict = "ACCEPT" if accept else "REJECT (regression)"
         print(f"[trust-region:{stage_name}] before={score_before:.5f} (support "
               f"{sup_before:.2f}) after={score_after:.5f} (support {sup_after:.2f}) "
               f"-> {verdict}", flush=True)
+    return accept
+
+
+def trust_region_accept_reject(w2c_before, w2c_after, depth, conf, K, images,
+                                *, trust_n_pairs=4096, trust_min_rot=20.0,
+                                trust_seed=0, stage_name="stage", verbose=True):
+    """Reject a proposal if it worsens the fixed held-out photometric score.
+
+    Held-out pairs are sampled independently of the optimizer's covisibility
+    graph. Neither this guard nor its score requires ground-truth poses.
+    """
+    scores = score_pose_history([w2c_before, w2c_after], depth, conf, K, images,
+                                n_pairs=trust_n_pairs, min_rot_deg=trust_min_rot,
+                                seed=trust_seed)
+    accept = accept_held_out_scores(scores, stage_name=stage_name, verbose=verbose)
     return (w2c_after if accept else w2c_before), accept
