@@ -17,4 +17,3 @@ safetensors==0.5.3
 trimesh==5.1.0
 evo==1.37.1
 proglog
-lz4

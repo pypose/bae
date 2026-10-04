@@ -1,11 +1,8 @@
-"""Depth-based correspondence induction, texture gate, and trust-region
-accept/reject guards. Ported from `da3/refine_poses.py`.
+"""Depth-induced correspondences and held-out photometric acceptance scoring.
 
-These two guards are NOT part of Open3D's own RGB-D odometry / color-map
-tutorials -- they exist because unguarded photometric refinement can regress
-on a meaningful fraction of real scenes (textureless rooms, already-good
-poses with a small basin). Both hook into `run_refine.py` around the
-refinement stages, not inside them.
+The DSLR benchmark scores raw refinement proposals against their initial
+poses, saving both raw and guarded outputs. The hosted demo also uses these
+scores for its convergence curve and guard verdict.
 """
 from __future__ import annotations
 
@@ -13,7 +10,7 @@ import numpy as np
 import torch
 
 from geometry import as_44, affine_inv, unproject_pixels, cam_to_world, world_to_cam, \
-    project_to_pixels, sample_at, grad_mag
+    project_to_pixels, sample_at
 
 
 # --------------------------------------------------------------------------- #
@@ -34,8 +31,7 @@ def induce_correspondences(w2c, depth, conf, K, pairs, n_samples=2048,
     unproject via depth_i, project into j; keep matches that are in-frustum,
     in front of j, and where view-j's measured depth is valid (+confident).
 
-    `conf` may be None (ScanNet++ iPhone depth has no confidence channel;
-    every valid-depth pixel is trusted equally).
+    `conf` may be None; then every valid-depth pixel is trusted equally.
 
     Fully vectorized across pairs -- no Python loop over `pairs.tolist()`,
     mirroring `photometric.py::build_photo_correspondences`'s design: one
@@ -111,52 +107,6 @@ def induce_correspondences(w2c, depth, conf, K, pairs, n_samples=2048,
         "uv_j": uv_j[m2], "d_j": d_j[m2], "z_j": z_j[m2],
         "w": torch.minimum(ci_i[m2], cj[m2]),
     }
-
-
-# --------------------------------------------------------------------------- #
-# Texture gate: skip refinement outright on textureless scenes.
-# --------------------------------------------------------------------------- #
-def scene_texture(images) -> float:
-    """Mean abs image-gradient over views (intensity in [0,1]); low => textureless.
-    images: (N,H,W,3) uint8 numpy."""
-    g = images.astype(np.float32).mean(-1) / 255.0
-    return float(0.5 * (np.abs(np.diff(g, axis=2)).mean()
-                        + np.abs(np.diff(g, axis=1)).mean()))
-
-
-def covis_texture(images, w2c, depth, conf, K, pairs, H, W, device,
-                   conf_percentile=40.0, n_samples=1024) -> float:
-    """Texture measured ONLY in the co-visible regions odometry actually uses
-    (unlike `scene_texture`'s whole-image mean, which is dragged down by
-    textureless regions the optimizer never samples)."""
-    gray = torch.from_numpy(images.astype(np.float32).mean(-1) / 255.0).to(device)
-    gmag = grad_mag(gray)
-    corr = induce_correspondences(w2c, depth, conf, K, pairs, n_samples=n_samples,
-                                   conf_percentile=conf_percentile)
-    if corr is None or corr["i_idx"].numel() == 0:
-        return float("nan")
-    vals = torch.empty(corr["i_idx"].numel(), device=device, dtype=gmag.dtype)
-    for vv in torch.unique(corr["i_idx"]):
-        sel = corr["i_idx"] == vv
-        vals[sel] = sample_at(gmag[vv], corr["uv_i"][sel], H, W)
-    return float(vals.mean())
-
-
-def texture_gate(images, w2c, depth, conf, K, pairs, *, tex_gate=0.003,
-                  mode="covis", verbose=True) -> bool:
-    """Returns True if the scene passes the texture gate (refinement should
-    proceed), False if it should be skipped."""
-    device = depth.device
-    H, W = depth.shape[-2:]
-    if mode == "covis":
-        tex = covis_texture(images, w2c, depth, conf, K, pairs, H, W, device)
-    else:
-        tex = scene_texture(images)
-    ok = np.isfinite(tex) and tex >= tex_gate
-    if verbose:
-        print(f"[texture-gate] mode={mode} tex={tex:.5f} threshold={tex_gate:.5f} "
-              f"-> {'PASS' if ok else 'SKIP (textureless)'}", flush=True)
-    return ok
 
 
 # --------------------------------------------------------------------------- #

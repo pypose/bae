@@ -84,20 +84,3 @@ def pair_errors(pred_w2c: torch.Tensor, gt_w2c: torch.Tensor) -> np.ndarray:
     t_err_deg = torch.rad2deg(torch.arccos(cos_t))
 
     return torch.maximum(rot_err_deg, t_err_deg).cpu().numpy()
-
-
-def evaluate_against_colmap(w2c_pred: torch.Tensor, frame_names, gt_w2c: dict,
-                             thresholds=(5, 10, 20, 30)) -> dict:
-    """w2c_pred: (N,4,4) or (N,3,4) predicted poses, aligned index-for-index
-    with `frame_names`. Only frames present in `gt_w2c` (COLMAP-registered)
-    are scored. Returns the `error_auc` dict, or {} if fewer than 2 frames
-    overlap."""
-    from geometry import as_44
-
-    keep = [i for i, n in enumerate(frame_names) if n in gt_w2c]
-    if len(keep) < 2:
-        return {}
-    w2c_pred = as_44(w2c_pred)[keep].detach().cpu().double()
-    gt = torch.stack([torch.from_numpy(gt_w2c[frame_names[i]]) for i in keep]).double()
-    errs = pair_errors(w2c_pred, gt)
-    return error_auc(errs, thresholds)

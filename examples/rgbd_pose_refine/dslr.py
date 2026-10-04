@@ -1,7 +1,7 @@
 """ScanNet++ DSLR loader: undistorted images + real COLMAP ground-truth poses.
 
-DSLR frames (unlike the iPhone stream) have accurate, bundle-adjusted COLMAP
-poses as genuine ground truth, and no rough initial pose of their own -- the
+DSLR frames have accurate, bundle-adjusted COLMAP poses as genuine ground
+truth, and no rough initial pose of their own -- the
 "noisy initial guess" for these has to come from an actual predictor (e.g.
 Depth Anything 3), not a stand-in. This module only handles the real,
 verifiable input: reading the camera model + per-frame ground-truth poses,
@@ -11,13 +11,63 @@ downstream use.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from dataset import _ScratchZip, read_colmap_images_txt
+
+class _ScratchZip:
+    """Extract a small zip to a temp dir; guarantees cleanup on exit."""
+
+    def __init__(self, zip_path: str):
+        self.zip_path = zip_path
+        self.tmpdir = None
+
+    def __enter__(self) -> str:
+        self.tmpdir = tempfile.mkdtemp(prefix="rgbd_pose_refine_")
+        with zipfile.ZipFile(self.zip_path) as zf:
+            zf.extractall(self.tmpdir)
+        return self.tmpdir
+
+    def __exit__(self, *exc):
+        if self.tmpdir is not None:
+            shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+
+def qvec2rotmat(qvec) -> np.ndarray:
+    """COLMAP quaternion (qw, qx, qy, qz) -> (3,3) rotation matrix."""
+    qw, qx, qy, qz = qvec
+    return np.array([
+        [1 - 2 * qy ** 2 - 2 * qz ** 2, 2 * qx * qy - 2 * qz * qw, 2 * qx * qz + 2 * qy * qw],
+        [2 * qx * qy + 2 * qz * qw, 1 - 2 * qx ** 2 - 2 * qz ** 2, 2 * qy * qz - 2 * qx * qw],
+        [2 * qx * qz - 2 * qy * qw, 2 * qy * qz + 2 * qx * qw, 1 - 2 * qx ** 2 - 2 * qy ** 2],
+    ], dtype=np.float64)
+
+
+def read_colmap_images_txt(path: str):
+    """Minimal reader for COLMAP's public `images.txt` text-model format:
+    comment lines start with '#', then exactly two lines per registered
+    image (a pose line, then a POINTS2D line -- which is often BLANK, e.g.
+    whenever "mean observations per image" is 0, so blank lines must NOT be
+    filtered out before pairing or every record after the first shifts by
+    one line). Returns {image_name: (4,4) w2c float64}."""
+    with open(path) as f:
+        lines = [ln for ln in f if not ln.startswith("#")]
+    assert len(lines) % 2 == 0, "expected exactly 2 lines per registered image"
+    out = {}
+    for i in range(0, len(lines), 2):
+        parts = lines[i].split()
+        qw, qx, qy, qz, tx, ty, tz = (float(x) for x in parts[1:8])
+        name = parts[9]
+        w2c = np.eye(4, dtype=np.float64)
+        w2c[:3, :3] = qvec2rotmat((qw, qx, qy, qz))
+        w2c[:3, 3] = (tx, ty, tz)
+        out[name] = w2c
+    return out
 
 
 def read_colmap_cameras_txt(path: str):

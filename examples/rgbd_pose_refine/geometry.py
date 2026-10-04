@@ -165,7 +165,7 @@ def image_gradients(gray: torch.Tensor):
 
 
 def grad_mag(gray: torch.Tensor) -> torch.Tensor:
-    """Mean-abs-gradient magnitude map (0.5*(|gx|+|gy|)), used for both the
-    texture gate and texture-biased pixel sampling."""
+    """Mean-abs-gradient magnitude map (0.5*(|gx|+|gy|)), used for
+    texture-biased pixel sampling."""
     gx, gy = image_gradients(gray)
     return 0.5 * (gx.abs() + gy.abs())
