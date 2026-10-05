@@ -37,23 +37,6 @@ def affine_inv(T: torch.Tensor) -> torch.Tensor:
     return out
 
 
-def _det3x3(R: torch.Tensor) -> torch.Tensor:
-    """Closed-form determinant of (...,3,3), computed elementwise.
-
-    Deliberately NOT `torch.linalg.det`/`torch.det`: on this environment
-    those dispatch to a JIT-compiled CUDA reduction kernel that fails to
-    build (`nvrtc: error: failed to open libnvrtc-builtins.so.13.0`) --  a
-    CUDA-toolkit/PyTorch NVRTC version mismatch on the host, not something
-    fixable from application code. A hand-rolled 3x3 cofactor-expansion
-    determinant is pure elementwise arithmetic, needs no JIT kernel, and is
-    exact for the only shape this function ever sees.
-    """
-    a, b, c = R[..., 0, 0], R[..., 0, 1], R[..., 0, 2]
-    d, e, f = R[..., 1, 0], R[..., 1, 1], R[..., 1, 2]
-    g, h, i = R[..., 2, 0], R[..., 2, 1], R[..., 2, 2]
-    return a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
-
-
 def orthonormalize(T: torch.Tensor) -> torch.Tensor:
     """Re-project the rotation block of (...,4,4) onto SO(3) via SVD, removing
     numerical drift accumulated across many pose updates (otherwise
@@ -62,7 +45,7 @@ def orthonormalize(T: torch.Tensor) -> torch.Tensor:
     R = T[..., :3, :3]
     U, _, Vh = torch.linalg.svd(R.double())
     Rn = U @ Vh
-    det = _det3x3(Rn)
+    det = torch.linalg.det(Rn)
     U2 = U.clone()
     U2[..., :, -1] = U2[..., :, -1] * det[..., None]
     Rn = U2 @ Vh

@@ -29,8 +29,6 @@ from guards import trust_region_accept_reject
 
 
 def metrics(w2c, gt):
-    # Keep evaluation on the input device too. This container's CPU vector
-    # acos kernel segfaults for some large pair sets; CUDA avoids that kernel.
     errors = pair_errors(as_44(w2c).double(), gt.double())
     return dict(error_auc(errors, (3,5,10,20,30)), median_pair_error_deg=float(np.median(errors)),
                 mean_pair_error_deg=float(errors.mean()))
