@@ -10,6 +10,7 @@ tmp_debug/*
 task.md
 *.pickle
 *.png
+!doc/assets/memory_performance.png
 .DS_Store
 tmp/*
 examples/module/pgo/data/*
