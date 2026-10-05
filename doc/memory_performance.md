@@ -16,7 +16,7 @@ memory and plots it against problem size.
 
 ## Output Graph
 
-![Peak and average GPU memory vs. number of optimizable parameters, for the three optimizer configurations](assets/memory_performance.png)
+![Peak and average GPU memory vs. number of optimizable parameters, for the three optimizer configurations](memory_performance.png)
 
 *Peak (left) and average (right) GPU memory allocation across the three
 optimizer configurations, plotted against problem size.*
