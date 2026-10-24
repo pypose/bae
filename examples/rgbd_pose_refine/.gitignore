@@ -1,0 +1,6 @@
+# Local presentation assets and generated reports are not part of the example.
+/docs/
+/visualization/
+/space/
+/showcase_gifs.py
+/benchmark/showcase_report.py
