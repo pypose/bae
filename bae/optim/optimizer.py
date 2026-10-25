@@ -1,11 +1,12 @@
 from functools import partial
+from typing import Any
 import torch
 from pypose.optim import LevenbergMarquardt as ppLM
 import pypose as pp
 
 from ..autograd.graph import jacobian
 from ..autograd.function import TrackingTensor
-from ..sparse.py_ops import diagonal_op_, inv_op
+from ..sparse.py_ops import compact_indices, diagonal_op_, inv_op
 from ..sparse.spgemm import CuSparse
 from ..utils.linear_operator import NormalMatVec
 from ..utils.parameter import parameter_update_shape
@@ -13,7 +14,7 @@ from ..utils.parameter import parameter_update_shape
 import warp as wp
 from warp import sparse
 from warp.optim import linear
-from bae.sparse.warp_wrappers import format_vec_for_bsr, torchbsr2wp, wp2torchbsr
+from bae.sparse.warp_wrappers import block_diag_wp, format_vec_for_bsr, torchbsr2wp, wp2torchbsr
 
 
 class LM(ppLM):
@@ -32,6 +33,7 @@ class LM(ppLM):
             if isinstance(R, TrackingTensor):
                 R = R.tensor()
             J = torch.cat([j.to_sparse_coo() for j in J], dim=-1).to_sparse_csr()
+            J = compact_indices(J)  # COO -> CSR widens indices to int64
 
             self.last = self.loss = self.loss if hasattr(self, 'loss') else self.model.loss(input, target)
             self.reject_count = 0
@@ -96,6 +98,20 @@ class LM(ppLM):
                         param.add_(step_view)
 
 
+@wp.kernel
+def _schur_diag_kernel(
+    J0: wp.array(dtype=Any), J1: wp.array(dtype=Any),
+    cam: wp.array(dtype=int), pt: wp.array(dtype=int),
+    V_inv: wp.array(dtype=Any), S: wp.array(dtype=Any),
+):
+    # Block diagonal of the Schur complement: S_cc = U_cc - sum_o W_o V_p^-1 W_o^T with
+    # W_o = J0_o^T J1_o, assuming one block per row in J0 and J1 (exact when each camera
+    # observes each point once). S holds diag(U) on entry.
+    o = wp.tid()
+    W = wp.transpose(J0[o]) @ J1[o]
+    wp.atomic_sub(S, cam[o], W @ V_inv[pt[o]] @ wp.transpose(W))
+
+
 class Schur(LM):
     @torch.no_grad()
     def step(self, input, target=None, weight=None):
@@ -138,6 +154,7 @@ class Schur(LM):
 
             solver_tol = getattr(self.solver, "tol", None)
             solver_maxiter = getattr(self.solver, "maxiter", 0) or 0
+            precond = getattr(self.solver, "preconditioner", linear.preconditioner)
 
             while self.last <= self.loss:
                 damp = partial(torch.mul, other=1+pg['damping'])
@@ -161,7 +178,12 @@ class Schur(LM):
                         shape=U.shape, dtype=U.values.dtype, device=U.device,
                         matvec=schur_matvec,
                     )
-                    schur_M = linear.preconditioner(U)
+                    # Precondition with the block diagonal of S instead of U.
+                    S_diag = sparse.bsr_get_diag(U)
+                    wp.launch(_schur_diag_kernel, dim=J0wp.nnz, inputs=[
+                        J0wp.values, J1wp.values, J0wp.columns, J1wp.columns,
+                        sparse.bsr_get_diag(V_i), S_diag])
+                    schur_M = precond(block_diag_wp(wp.to_torch(S_diag)))
 
                     wp.copy(src=Ic, dest=rhs_c)
                     sparse.bsr_mv(V_i, Ip, y=scratch_pts2, beta=0.0)
@@ -177,7 +199,7 @@ class Schur(LM):
                         size=Upt.shape, device=Upt.device, dtype=Upt.dtype,
                     )
                     schur_op = sparse.bsr_axpy(WVi_Wt, torchbsr2wp(U_clone_torch), alpha=-1.0)
-                    schur_M = linear.preconditioner(schur_op)
+                    schur_M = precond(schur_op)
                     wp.copy(src=Ic, dest=rhs_c)
                     sparse.bsr_mv(V_i, Ip, y=scratch_pts2, beta=0.0)
                     sparse.bsr_mv(W, scratch_pts2, y=rhs_c, alpha=-1.0, beta=1.0)
@@ -209,7 +231,7 @@ class Schur(LM):
                     x=D_p,
                     tol=solver_tol,
                     maxiter=solver_maxiter,
-                    M=linear.preconditioner(V),
+                    M=precond(V),
                 )
 
                 D_c_t = wp.to_torch(D_c).flatten()

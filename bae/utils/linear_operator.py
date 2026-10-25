@@ -44,18 +44,24 @@ class NormalMatVec:
         self.set_damping(damping)
 
     def set_damping(self, damping: Union[float, Tensor]) -> None:
+        # Precompute damping * diag once here so matvec needs no host sync or
+        # host-to-device copy of the damping scalar.
         if isinstance(damping, Tensor):
             if damping.numel() != 1:
                 raise ValueError("damping tensor must be scalar")
-            self.damping = damping.to(device=self.device, dtype=self.dtype)
+            self.damping = damping.to(device=self.device, dtype=self.dtype).reshape(())
+            self._damp_diag = (self.damping * self._diag).unsqueeze(-1)
         else:
             self.damping = float(damping)
+            self._damp_diag = (
+                None if self.damping == 0.0 else (self.damping * self._diag).unsqueeze(-1)
+            )
 
     def diagonal(self) -> Tensor:
-        damp = self._damping_value()
-        if damp is None:
-            return self._diag
-        return self._diag * (1.0 + damp)
+        # Always a new tensor: callers (e.g. PCG) modify the result in place.
+        if self._damp_diag is None:
+            return self._diag.clone()
+        return self._diag + self._damp_diag.squeeze(-1)
 
     def matvec(self, x: Tensor) -> Tensor:
         if x.ndim == 1:
@@ -72,9 +78,8 @@ class NormalMatVec:
         Jt = self._get_Jt()
         z = Jt @ y
 
-        damp = self._damping_value()
-        if damp is not None:
-            z = z + damp * self._diag.unsqueeze(-1) * x2d
+        if self._damp_diag is not None:
+            z.addcmul_(self._damp_diag, x2d)
 
         return z.squeeze(-1) if x.ndim == 1 else z
 
@@ -112,15 +117,6 @@ class NormalMatVec:
                 Jt = Jt.to_sparse_bsr(blocksize=bs)
             self._Jt = Jt
         return self._Jt
-
-    def _damping_value(self) -> Optional[Tensor]:
-        if isinstance(self.damping, Tensor):
-            if self.damping.item() == 0.0:
-                return None
-            return self.damping
-        if self.damping == 0.0:
-            return None
-        return torch.tensor(self.damping, device=self.device, dtype=self.dtype)
 
     @staticmethod
     def _compute_diag(J: Tensor) -> Tensor:

@@ -19,6 +19,12 @@ def torchbsr2wp(tbsr):
     bsr.offsets = wp.from_torch(tbsr.crow_indices().to(torch.int32))
     return bsr
 
+def block_diag_wp(blocks):
+    """Warp BSR matrix with the (n, b, b) torch tensor `blocks` on its diagonal."""
+    n, bm, bn = blocks.shape
+    idx = torch.arange(n + 1, dtype=torch.int32, device=blocks.device)
+    return torchbsr2wp(torch.sparse_bsr_tensor(idx, idx[:-1], blocks.contiguous(), size=(n * bm, n * bn)))
+
 def wp2torchbsr(bsr):
     """
     Convert a Warp BSR matrix back into a PyTorch sparse BSR tensor.

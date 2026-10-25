@@ -2,7 +2,10 @@ from typing import Optional
 import torch
 from torch import Tensor
 from pypose.optim.solver import CG
+import warp as wp
+from warp import sparse
 from bae.sparse.py_ops import spdiags_
+from bae.sparse.warp_wrappers import block_diag_wp
 
 try:
     from bae.sparse.solve import CuDirectSparseSolver as CuDSS
@@ -36,6 +39,14 @@ class PCG(CG):
         if was_vector:
             res = res.squeeze(-1)
         return res
+
+
+class BlockJacobiPCG(PCG):
+    """PCG whose preconditioner for warp BSR systems (used by `Schur`) is the
+    inverse of the diagonal blocks of A, instead of warp's scalar Jacobi."""
+    def preconditioner(self, A):
+        return block_diag_wp(torch.linalg.inv(wp.to_torch(sparse.bsr_get_diag(A))))
+
 
 class SciPySpSolver(torch.nn.Module):
     def __init__(self, ):
