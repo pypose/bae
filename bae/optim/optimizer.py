@@ -48,6 +48,8 @@ class LM(ppLM):
                 del J_T
                 diagonal_op_(A, op=partial(torch.clamp_, min=pg['min'], max=pg['max']))
 
+            # Inverse updates cannot recover NaNs or exactly undo Lie-group updates.
+            params_backup = [(p, p.detach().clone()) for p in pg['params'] if p.requires_grad]
             while self.last <= self.loss:
                 if self.matrix_free_normal:
                     diag_scale *= 1.0 + pg['damping']
@@ -63,9 +65,14 @@ class LM(ppLM):
                 self.loss = self.model.loss(input, target)
                 print("Loss:", self.loss, "Last Loss:", self.last, "Reject Count:", self.reject_count, "Damping:", pg['damping'])
                 self.strategy.update(pg, last=self.last, loss=self.loss, J=J, D=D, R=R.view(-1, 1))
-                if self.last < self.loss and self.reject_count < self.reject:  # reject step
-                    self.update_parameter(params=pg['params'], step=-D)
-                    self.loss, self.reject_count = self.last, self.reject_count + 1
+                if not torch.isfinite(self.loss) or \
+                        (self.last < self.loss and self.reject_count < self.reject):
+                    for parameter, value in params_backup:
+                        parameter.copy_(value)
+                    self.loss = self.last
+                    if self.reject_count >= self.reject:
+                        break
+                    self.reject_count += 1
                 else:
                     break
         return self.loss
@@ -139,6 +146,8 @@ class Schur(LM):
             solver_tol = getattr(self.solver, "tol", None)
             solver_maxiter = getattr(self.solver, "maxiter", 0) or 0
 
+            # Inverse updates cannot recover NaNs or exactly undo Lie-group updates.
+            params_backup = [(p, p.detach().clone()) for p in pg['params'] if p.requires_grad]
             while self.last <= self.loss:
                 damp = partial(torch.mul, other=1+pg['damping'])
                 diagonal_op_(Upt, op=damp)
@@ -229,9 +238,14 @@ class Schur(LM):
                     R=R_flat.view(-1, 1),
                 )
 
-                if self.last < self.loss and self.reject_count < self.reject:  # reject step
-                    self.update_parameter(params=pg['params'], step=-D)
-                    self.loss, self.reject_count = self.last, self.reject_count + 1
+                if not torch.isfinite(self.loss) or \
+                        (self.last < self.loss and self.reject_count < self.reject):
+                    for parameter, value in params_backup:
+                        parameter.copy_(value)
+                    self.loss = self.last
+                    if self.reject_count >= self.reject:
+                        break
+                    self.reject_count += 1
                 else:
                     break
 
