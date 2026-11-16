@@ -129,9 +129,9 @@ class Schur(LM):
             U = sparse.bsr_mm(J0twp, J0wp)
             V = sparse.bsr_mm(J1twp, J1wp)
 
-            if self.matrix_free_normal:
-                del J0twp, J1twp
-            else:
+            # Matrix-free keeps J^T for the J^T products: Warp's bsr_mv(..., transpose=True)
+            # scatters with atomics and is ~5x slower than a plain bsr_mv on J^T.
+            if not self.matrix_free_normal:
                 W = sparse.bsr_mm(J0twp, J1wp)
                 Wt = sparse.bsr_transposed(W)
                 del J0twp, J1twp
@@ -166,12 +166,12 @@ class Schur(LM):
                 if self.matrix_free_normal:
                     def schur_matvec(x, y, z, alpha, beta, _V_i=V_i):
                         sparse.bsr_mv(J0wp, x, y=scratch_obs, beta=0.0)
-                        sparse.bsr_mv(J1wp, scratch_obs, y=scratch_pts, beta=0.0, transpose=True)
+                        sparse.bsr_mv(J1twp, scratch_obs, y=scratch_pts, beta=0.0)
                         sparse.bsr_mv(_V_i, scratch_pts, y=scratch_pts2, beta=0.0)
                         sparse.bsr_mv(J1wp, scratch_pts2, y=scratch_obs, beta=0.0)
                         if z.ptr != y.ptr and beta != 0.0:
                             wp.copy(src=y, dest=z)
-                        sparse.bsr_mv(J0wp, scratch_obs, y=z, alpha=-alpha, beta=beta, transpose=True)
+                        sparse.bsr_mv(J0twp, scratch_obs, y=z, alpha=-alpha, beta=beta)
                         sparse.bsr_mv(U, x, y=z, alpha=alpha, beta=1.0)
 
                     schur_op = linear.LinearOperator(
@@ -188,7 +188,7 @@ class Schur(LM):
                     wp.copy(src=Ic, dest=rhs_c)
                     sparse.bsr_mv(V_i, Ip, y=scratch_pts2, beta=0.0)
                     sparse.bsr_mv(J1wp, scratch_pts2, y=scratch_obs, beta=0.0)
-                    sparse.bsr_mv(J0wp, scratch_obs, y=rhs_c, alpha=-1.0, beta=1.0, transpose=True)
+                    sparse.bsr_mv(J0twp, scratch_obs, y=rhs_c, alpha=-1.0, beta=1.0)
                 else:
                     WV_i = sparse.bsr_mm(W, V_i)
                     WVi_Wt = sparse.bsr_mm(WV_i, Wt)
@@ -219,8 +219,7 @@ class Schur(LM):
                 
                 if self.matrix_free_normal:
                     sparse.bsr_mv(J0wp, D_c, y=scratch_obs, beta=0.0)
-                    sparse.bsr_mv(J1wp, scratch_obs, y=rhs_p,
-                                  alpha=-1.0, beta=1.0, transpose=True)
+                    sparse.bsr_mv(J1twp, scratch_obs, y=rhs_p, alpha=-1.0, beta=1.0)
                 else:
                     sparse.bsr_mv(Wt, D_c, y=rhs_p, alpha=-1.0, beta=1.0)
 
