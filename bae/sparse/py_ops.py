@@ -166,6 +166,23 @@ def spdiags_(diagonal, offset, shape, layout):
     return torch.sparse_csr_tensor(crow_indices, col_indices, diagonal)
 
 
+def compact_indices(input):
+    """
+    Returns the CSR/BSR tensor with int32 indices if the nnz and both dimensions fit in int32,
+    otherwise the input unchanged. SpMV/SpGEMM are memory bound and int64 indices are a large
+    share of the bytes read.
+    """
+    if input.layout not in (torch.sparse_csr, torch.sparse_bsr):
+        return input
+    if input.col_indices().dtype == torch.int32:
+        return input
+    if max(input._nnz(), *input.shape) > torch.iinfo(torch.int32).max:
+        return input
+    ctor = torch.sparse_csr_tensor if input.layout == torch.sparse_csr else torch.sparse_bsr_tensor
+    return ctor(input.crow_indices().to(torch.int32), input.col_indices().to(torch.int32),
+                input.values(), size=input.shape)
+
+
 def inv_op(input):
     crow_indices = input.crow_indices() # b + 1 dimensional
     col_indices = input.col_indices() # b + 1 dimensional
