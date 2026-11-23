@@ -332,6 +332,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     py::class_<CuSparse>(m, "CuSparse")
         .def(py::init<>())
         .def("__call__", &CuSparse::cusparse_spgemm, "");
-    m.def("convert_indices_from_csr_to_coo", &at::_convert_indices_from_csr_to_coo, "pytorch aten wrapper");
-    m.def("convert_indices_from_coo_to_csr", &at::_convert_indices_from_coo_to_csr, "pytorch aten wrapper");
 }

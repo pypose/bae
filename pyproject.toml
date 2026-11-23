@@ -1,3 +1,10 @@
 [build-system]
-requires = ["setuptools", "wheel", "torch", "warp-lang>=1.13.0"]
+# Build environment only; installed runtime dependencies are in setup.py.
+requires = [
+    "setuptools>=70.1",
+    "wheel",
+    "packaging",
+    "torch>=2.13; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
 build-backend = "setuptools.build_meta"

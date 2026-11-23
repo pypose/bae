@@ -6,8 +6,9 @@ import pypose as pp
 import torch
 from torch.func import jacrev
 
-from ..sparse import warp_wrappers as _warp_wrappers  # noqa: F401
+from ..utils.config import jacobian_tuple_enabled
 from ..utils.parameter import trim_parameter_jacobian_values
+from ..sparse.tensor import BSRTensor
 from .function import _INDEXED_TRACE_TAG
 
 
@@ -424,11 +425,12 @@ def jacobian_components(output, params):
     return tuple(result)
 
 
-def materialize_jacobian_components(components):
+def materialize_jacobian_components(components, *, as_tuple: Optional[bool] = None):
     """Create sparse BSR tensors while preserving parameter alignment.
 
     An empty component group represents a parameter that does not contribute
     to the output and is materialized as ``None``.
+    ``as_tuple`` selects tuple-backed :class:`BSRTensor`.
     """
     result = []
     for param_components in components:
@@ -436,7 +438,8 @@ def materialize_jacobian_components(components):
             result.append(None)
             continue
         sparse_components = [
-            torch.sparse_bsr_tensor(
+            BSRTensor(*component[:3], size=component.size, is_coalesced=True)
+            if as_tuple else torch.sparse_bsr_tensor(
                 component.crow_indices,
                 component.col_indices,
                 component.values,
@@ -587,6 +590,10 @@ def backward(output_, is_root=False):
 
 
 def jacobian(output, params):
+    # TODO: should we deprecate this in favor of jacobian_components + materialize_jacobian_components?
+    if jacobian_tuple_enabled():
+        components = jacobian_components(output, params)
+        return materialize_jacobian_components(components, as_tuple=True)
     assert output.optrace[0] in ('map', 'index', 'cat'), "Unsupported last operation in compute graph"
     _clear_jactrace(output, params)
     try:

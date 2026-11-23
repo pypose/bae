@@ -37,6 +37,46 @@ class PCG(CG):
             res = res.squeeze(-1)
         return res
 
+    def _forward_mps(self, A, b, x, M):
+        # TODO: Upstream these scalar reductions to PyPose CG, then remove this
+        # duplicate loop and delegate to super().forward on MPS as well.
+        # Preserve PyPose CG's recurrence, stopping checks, output-buffer use,
+        # and in-place warm-start updates. For a real single-column RHS, its
+        # two 1xN @ Nx1 products are scalar reductions. The equivalent
+        # multiply-and-sum avoids the slow MPS matrix-multiply dispatch.
+        if x is None:
+            x = torch.zeros_like(b)
+        elif x.shape != b.shape:
+            raise ValueError("x must have the same shape as b")
+
+        bnrm2 = torch.linalg.norm(b, dim=0)
+        if (bnrm2 == 0).all():
+            return b
+        atol = self.tol * bnrm2
+        maxiter = b.shape[-2] * 10 if self.maxiter is None else self.maxiter
+        r = b - A @ x if x.any() else b.clone()
+        q, z = torch.empty_like(b), torch.empty_like(b)
+        rho_prev, p = None, None
+
+        for iteration in range(maxiter):
+            if (torch.linalg.norm(r, dim=0) < atol).all():
+                return x
+
+            torch.matmul(M, r, out=z)
+            rho_cur = (r * z).sum(dim=0, keepdim=True)
+            if iteration:
+                p.mul_(rho_cur / rho_prev).add_(z)
+            else:
+                p = z.clone()
+
+            torch.matmul(A, p, out=q)
+            alpha = rho_cur / (p * q).sum(dim=0, keepdim=True)
+            x += alpha * p
+            r -= alpha * q
+            rho_prev = rho_cur
+
+        return x
+
 class SciPySpSolver(torch.nn.Module):
     def __init__(self, ):
         super().__init__()
