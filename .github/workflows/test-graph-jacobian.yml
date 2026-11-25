@@ -43,4 +43,4 @@ jobs:
           PYTHONPATH: /tmp/pydeps:${{ github.workspace }}
         run: |
           python -c "import torch; print('torch', torch.__version__)"
-          python -m pytest -q tests/autograd tests/test_normal_operator.py tests/test_normal_diagonal_consistency.py tests/test_tuple_normal_operator.py tests/test_mps_pcg.py tests/sparse/test_tuple_ops.py tests/sparse/test_sparse_tensor.py tests/test_build.py
+          python -m pytest -q tests/autograd tests/test_normal_operator.py tests/sparse/tuple

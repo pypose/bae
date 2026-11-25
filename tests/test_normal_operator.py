@@ -1,8 +1,49 @@
 import pytest
+import subprocess
+import sys
 import torch
 
 from bae.utils.linear_operator import NormalMatVec
 from bae.utils.pysolvers import PCG
+
+
+@pytest.mark.parametrize('layout', ['csr', 'bsr'])
+@pytest.mark.parametrize('device', ['cpu', pytest.param('cuda', marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason='CUDA is unavailable'))])
+def test_standalone_pcg_import_solves_native_sparse_without_prior_registrations(layout, device):
+    # A subprocess is essential: importing bae.optim or collecting graph tests
+    # installs sparse diagonal registrations and masked this import-order bug.
+    script = '''
+import importlib.abc
+import sys
+import torch
+
+class BlockOptionalBackends(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "bae.sparse.solve":
+            raise ModuleNotFoundError("CuDSS is optional", name=fullname)
+        if fullname.split(".")[0] == "warp":
+            raise ModuleNotFoundError("Warp is optional", name=fullname)
+
+sys.meta_path.insert(0, BlockOptionalBackends())
+from bae.utils.pysolvers import PCG
+device = sys.argv[2]
+dense = torch.tensor([[4., 1.], [1., 3.]], dtype=torch.float64, device=device)
+rhs = torch.tensor([1., 2.], dtype=torch.float64, device=device)
+if sys.argv[1] == "csr":
+    matrix = dense.to_sparse_csr()
+else:
+    matrix = dense.to_sparse_bsr((2, 2))
+    # A zero RHS still constructs the BSR diagonal preconditioner, but does
+    # not require the MKL BSR matvec absent from macOS CPU wheels.
+    if device == "cpu" and not torch.backends.mkl.is_available():
+        rhs.zero_()
+actual = PCG(maxiter=10, tol=1e-10)(matrix, rhs)
+torch.testing.assert_close(actual, torch.linalg.solve(dense, rhs))
+torch.testing.assert_close(matrix.to_dense(), dense)
+'''
+    result = subprocess.run([sys.executable, '-c', script, layout, device], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
 def test_normal_matvec_dense_matches_explicit():
@@ -50,6 +91,7 @@ def test_normal_matvec_sparse_csr_matches_explicit_and_cached_diag():
     torch.testing.assert_close(y_op, y_ex, rtol=1e-10, atol=1e-10)
 
 
+@pytest.mark.skipif(not torch.backends.mkl.is_available(), reason="Native CPU BSR matvec requires MKL")
 def test_normal_matvec_sparse_bsr_matches_explicit():
     torch.manual_seed(3)
     m, n = 6, 4

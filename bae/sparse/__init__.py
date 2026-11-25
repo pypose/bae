@@ -1,11 +1,14 @@
+from importlib import import_module
+
 from .py_ops import *
-try:
-    from .solve import *
-except ImportError:
-    # `bae.sparse.solve` depends on NVIDIA cuDSS. Some environments ship cuDSS built
-    # against a newer CUDA/cuBLAS (e.g. `libcublas.so.13`), which makes importing
-    # this package fail even if you don't use the direct solver. Keep the rest of
-    # the sparse ops usable and let callers opt into `bae.sparse.solve` explicitly.
-    pass
-from .conversion import *
+from .tuple_ops import bsr_mv, bsr_diagonal, bsr_transposed
+from .tensor import BSRTensor, SparseCat
 from .warp_wrappers import *
+
+
+def __getattr__(name):
+    module = {'gebsr2csr': '.conversion', 'CuDirectSparseSolver': '.solve',
+              'cusolvesp': '.solve'}.get(name)
+    if module is not None:
+        return getattr(import_module(module, __name__), name)
+    raise AttributeError(f'module {__name__!r} has no attribute {name!r}')
