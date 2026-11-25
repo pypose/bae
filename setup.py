@@ -1,14 +1,112 @@
 import os
+import platform
 import site
+import subprocess
+import sys
 import sysconfig
 from importlib.metadata import PackageNotFoundError, version as get_installed_version
+from pathlib import Path
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
-from setuptools import setup, find_packages
-from torch.utils.cpp_extension import CUDAExtension, BuildExtension
+from setuptools import Command, setup, find_packages
+from setuptools.command.bdist_wheel import bdist_wheel
+from setuptools.command.build import build
+from setuptools.errors import CompileError
+import torch
+from torch.utils.cpp_extension import CUDA_HOME, CUDAExtension, BuildExtension
 
 VERSION = "0.2.6"
 SUPPORTED_CUDSS_SPECIFIER = SpecifierSet("<0.9")
+METAL_SOURCE = Path("bae/sparse/bsr_mps.metal")
+METAL_LIBRARY = METAL_SOURCE.with_suffix(".metallib")
+
+
+def build_metal_enabled():
+    return sys.platform == "darwin" and platform.machine() == "arm64"
+
+
+def build_cuda_enabled():
+    # A GPU need not be visible to build a CUDA wheel (for example, in CI).
+    return not build_metal_enabled() and CUDA_HOME is not None and torch.version.cuda is not None
+
+
+def metal_deployment_target():
+    target = Version(os.environ.get("MACOSX_DEPLOYMENT_TARGET", "14.0"))
+    target = max(target, Version("14.0"))
+    return f"{target.major}.{target.minor}"
+
+
+class BuildMetal(Command):
+    """Build the Metal library for both regular and PEP 660 editable installs."""
+
+    user_options = []
+    editable_mode = False
+
+    def initialize_options(self):
+        self.build_lib = None
+        self.build_temp = None
+
+    def finalize_options(self):
+        self.set_undefined_options(
+            "build", ("build_lib", "build_lib"), ("build_temp", "build_temp")
+        )
+
+    def get_source_files(self):
+        return [str(METAL_SOURCE)]
+
+    def get_outputs(self):
+        return [str(Path(self.build_lib) / METAL_LIBRARY)] if build_metal_enabled() else []
+
+    def get_output_mapping(self):
+        if self.editable_mode and build_metal_enabled():
+            return {self.get_outputs()[0]: str(METAL_LIBRARY)}
+        return {}
+
+    def run(self):
+        if not build_metal_enabled():
+            return
+        if Version(torch.__version__.split("+")[0]) < Version("2.13") or not hasattr(torch.mps, "load_metallib"):
+            raise CompileError("Building BAE for MPS requires PyTorch >= 2.13 with torch.mps.load_metallib.")
+
+        output = METAL_LIBRARY if self.editable_mode else Path(self.get_outputs()[0])
+        intermediate = Path(self.build_temp) / "bsr_mps.air"
+        if self.dry_run:
+            return
+        output.parent.mkdir(parents=True, exist_ok=True)
+        intermediate.parent.mkdir(parents=True, exist_ok=True)
+        commands = [
+            [
+                "xcrun", "-sdk", "macosx", "metal", "-std=metal3.0",
+                f"-mmacosx-version-min={metal_deployment_target()}",
+                "-c", str(METAL_SOURCE), "-o", str(intermediate),
+            ],
+            ["xcrun", "-sdk", "macosx", "metallib", str(intermediate), "-o", str(output)],
+        ]
+        try:
+            for command in commands:
+                subprocess.run(command, check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise CompileError(
+                "Could not compile BAE's Metal kernels. Install Xcode and its Metal Toolchain "
+                "(`xcodebuild -downloadComponent MetalToolchain`), then reinstall BAE."
+            ) from error
+
+
+class BuildWithMetal(build):
+    sub_commands = build.sub_commands + [("build_metal", None)]
+
+
+class PlatformWheel(bdist_wheel):
+    def finalize_options(self):
+        super().finalize_options()
+        if build_metal_enabled():
+            self.root_is_pure = False
+
+    def get_tag(self):
+        if build_metal_enabled():
+            target = metal_deployment_target().replace(".", "_")
+            return "py3", "none", f"macosx_{target}_arm64"
+        return super().get_tag()
 
 def readme():
     """Read the README.md file for long description"""
@@ -99,7 +197,10 @@ def resolve_cudss_link_inputs(cudss_root):
 
     return libraries, extra_link_args, nvcc_args
 
-if __name__ == '__main__':
+def cuda_extensions():
+    if not build_cuda_enabled():
+        return []
+
     if USE_CUDSS:
         validate_cudss_packages(SUPPORTED_CUDSS_SPECIFIER)
 
@@ -160,18 +261,26 @@ if __name__ == '__main__':
                 library_dirs=library_dirs,
             )
         )
+    return ext_modules
 
+
+if __name__ == '__main__':
     setup(
         name = 'bae',
         version = VERSION,
         description = 'PyTorch implementation of BA',
         long_description = readme(),
         long_description_content_type = "text/markdown",
+        license_files=["LICENSE", "third_party/warp/LICENSE.md"],
         python_requires = ">=3.8",
         install_requires=[
-            'torch',
-            'torchvision',
-            'warp-lang',
+            'torch>=2.13; sys_platform == "darwin" and platform_machine == "arm64"',
+            'torch; sys_platform != "darwin" or platform_machine != "arm64"',
+            'numpy',
+            'scipy',
+            'matplotlib',
+            'pillow',
+            'warp-lang>=1.13.0; sys_platform != "darwin"',
         ],
         packages=find_packages(exclude=['./ba_example.py', 
                                         './setup.py', 
@@ -183,6 +292,12 @@ if __name__ == '__main__':
                                         './datapipes',
                                         './examples',
                                         './tests',]),
-        ext_modules=ext_modules,
-        cmdclass={'build_ext': BuildExtension}
+        ext_modules=cuda_extensions(),
+        package_data={'bae.sparse': ['*.metal']},
+        cmdclass={
+            'build': BuildWithMetal,
+            'build_metal': BuildMetal,
+            'build_ext': BuildExtension,
+            'bdist_wheel': PlatformWheel,
+        },
     )

@@ -5,13 +5,10 @@ from typing import Optional, Callable
 
 import torch
 from torch.utils._triton import has_triton
-from .spgemm import convert_indices_from_csr_to_coo
 
-USE_TRITON = True
+USE_TRITON = torch.cuda.is_available() and has_triton()
 
-if not USE_TRITON:
-    print("Skipping because triton is not supported on this device.")
-else:
+if USE_TRITON:
     import triton
     from triton import language as tl
 
@@ -78,28 +75,7 @@ else:
         valj = tl.load(source + js)
         output = tl.sum(valj)
         tl.store(out_ptr + row, output)
-def jtj_diag(Jt):
-    block_shape = Jt.values().shape[-2:]
-    col_indices = Jt.col_indices()
-    nnz = col_indices.shape[-1]
-    crow_indices = Jt.crow_indices()
-    srows = crow_indices.shape[-1] - 1
-    values = Jt.values()
-    values = values.flatten(start_dim=0, end_dim=1)
-    dotp = torch.linalg.vecdot(values, values)
-    cooa = convert_indices_from_csr_to_coo(crow_indices.contiguous(), col_indices.contiguous(), crow_indices.dtype == torch.int32, False)
-    row_indices = cooa[0]
-    if block_shape[0] == 1:
-        ...
-    else:
-        row_indices = row_indices * block_shape[0]
-        row_indices = row_indices.unsqueeze(-1)
-        offsets = torch.arange(0, block_shape[0], device=row_indices.device, dtype=row_indices.dtype).unsqueeze(0)
-        row_indices = row_indices + offsets
-        row_indices = row_indices.flatten()
-    diag_values = torch.zeros(srows * block_shape[0], device=values.device, dtype=values.dtype)
-    diag_values.scatter_add_(0, row_indices.to(torch.int64), dotp)
-    return diag_values
+
 
 def diagonal_op_(input, offset: int=0, op: Optional[Callable]=None):
     crow_indices = input.crow_indices() # b + 1 dimensional
@@ -114,7 +90,7 @@ def diagonal_op_(input, offset: int=0, op: Optional[Callable]=None):
 
     #simple case(block is square and offset is 0)
     if dm == dn and offset == 0:
-        if not USE_TRITON:
+        if not USE_TRITON or input.device.type != 'cuda':
             dummy_val = torch.zeros(bsr_values.shape[0], device='cpu')
             dummy = torch.sparse_csr_tensor(crow_indices=crow_indices.to('cpu'),
                                             col_indices=col_indices.to('cpu'),
@@ -137,7 +113,7 @@ def diagonal_op_(input, offset: int=0, op: Optional[Callable]=None):
         else:
             results_shape = (n_diag_blocks, dm)
             results = torch.zeros(results_shape, dtype=values.dtype, device=values.device)
-            results[indices[0, diag_indices]] = values
+            results[col_indices[diag_indices]] = values
             assert op is None, "op is not supported for diagonal that has empty values."
         if bsr_values.ndim > 1:
             results = torch.flatten(results, start_dim=-2, end_dim=-1)

@@ -1,10 +1,14 @@
 
 # https://nvidia.github.io/warp/modules/sparse.html
-import warp as wp
-from warp import sparse as wps
-from warp.optim import linear as wpol
 import torch
-wp.init()
+
+try:
+    import warp as wp
+    from warp import sparse as wps
+    from warp.optim import linear as wpol
+    wp.init()
+except ImportError:
+    pass
 
 
 def torchbsr2wp(tbsr):

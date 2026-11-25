@@ -6,8 +6,8 @@ import pypose as pp
 import torch
 from torch.func import jacrev
 
-from ..sparse import warp_wrappers as _warp_wrappers  # noqa: F401
 from ..utils.parameter import trim_parameter_jacobian_values
+from ..sparse.tensor import BSRTensor
 from .function import _INDEXED_TRACE_TAG
 
 
@@ -424,11 +424,12 @@ def jacobian_components(output, params):
     return tuple(result)
 
 
-def materialize_jacobian_components(components):
+def materialize_jacobian_components(components, *, as_tuple: bool = False):
     """Create sparse BSR tensors while preserving parameter alignment.
 
     An empty component group represents a parameter that does not contribute
     to the output and is materialized as ``None``.
+    ``as_tuple`` selects tuple-backed :class:`BSRTensor`.
     """
     result = []
     for param_components in components:
@@ -436,7 +437,8 @@ def materialize_jacobian_components(components):
             result.append(None)
             continue
         sparse_components = [
-            torch.sparse_bsr_tensor(
+            BSRTensor(*component[:3], size=component.size, is_coalesced=True)
+            if as_tuple else torch.sparse_bsr_tensor(
                 component.crow_indices,
                 component.col_indices,
                 component.values,

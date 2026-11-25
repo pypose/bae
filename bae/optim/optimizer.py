@@ -3,24 +3,32 @@ import torch
 from pypose.optim import LevenbergMarquardt as ppLM
 import pypose as pp
 
-from ..autograd.graph import jacobian
+from ..autograd.graph import jacobian, jacobian_components, materialize_jacobian_components
 from ..autograd.function import TrackingTensor
 from ..sparse.py_ops import diagonal_op_, inv_op
-from ..sparse.spgemm import CuSparse
 from ..utils.linear_operator import NormalMatVec
 from ..utils.parameter import parameter_update_shape
 
-import warp as wp
-from warp import sparse
-from warp.optim import linear
-from bae.sparse.warp_wrappers import format_vec_for_bsr, torchbsr2wp, wp2torchbsr
+try:
+    import warp as wp
+    from warp import sparse
+    from warp.optim import linear
+    from bae.sparse.warp_wrappers import format_vec_for_bsr, torchbsr2wp, wp2torchbsr
+except ImportError:
+    pass
 
 
 class LM(ppLM):
     def __init__(self, *args, matrix_free_normal: bool = False, **kwargs):
         self.matrix_free_normal = matrix_free_normal
         super(LM, self).__init__(*args, **kwargs)
-        self.mm = CuSparse()
+        self.tuple_mode = any(param.device.type == 'mps'
+                              for pg in self.param_groups for param in pg['params'])
+        if self.tuple_mode and not self.matrix_free_normal:
+            raise ValueError("MPS optimization requires matrix_free_normal=True.")
+        if not self.matrix_free_normal:
+            from ..sparse.spgemm import CuSparse
+            self.mm = CuSparse()
 
     @torch.no_grad()
     def step(self, input, target=None, weight=None):
@@ -28,17 +36,30 @@ class LM(ppLM):
             weight = self.weight if weight is None else weight
             R = list(self.model(input))
             R = R[0]
-            J = jacobian(R, pg['params'])
+            if self.tuple_mode:
+                J = materialize_jacobian_components(
+                    jacobian_components(R, pg['params']), as_tuple=True,
+                )
+            else:
+                J = jacobian(R, pg['params'])
+            if len(J) != len(pg['params']) or any(block is None for block in J):
+                raise ValueError("All optimized parameters must contribute to the residual.")
             if isinstance(R, TrackingTensor):
                 R = R.tensor()
-            J = torch.cat([j.to_sparse_coo() for j in J], dim=-1).to_sparse_csr()
+            if self.tuple_mode:
+                J = torch.cat(J, dim=1)
+            else:
+                J = torch.cat([j.to_sparse_coo() for j in J], dim=-1).to_sparse_csr()
 
             self.last = self.loss = self.loss if hasattr(self, 'loss') else self.model.loss(input, target)
             self.reject_count = 0
 
             if self.matrix_free_normal:
-                diag = NormalMatVec._compute_diag(J).clamp(min=pg['min'], max=pg['max'])
-                A = NormalMatVec(J, damping=0.0, diag=diag)
+                # for A(x) = J.T @ (J @ x) + (s * diag - raw_diag) * x
+                # can we avoid keeping both diag and raw_diag? 
+                raw_diag = NormalMatVec._compute_diag(J)
+                diag = raw_diag.clamp(min=pg['min'], max=pg['max'])
+                A = NormalMatVec(J, damping=0.0, diag=diag, raw_diag=raw_diag)
                 rhs = -(A._get_Jt() @ R.view(-1, 1))
                 diag_scale = 1.0
             else:
@@ -97,6 +118,11 @@ class LM(ppLM):
 
 
 class Schur(LM):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.tuple_mode:
+            raise NotImplementedError("Schur requires native sparse tensors; use LM with PCG for tuple/MPS optimization.")
+
     @torch.no_grad()
     def step(self, input, target=None, weight=None):
         for pg in self.param_groups:

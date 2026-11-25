@@ -26,7 +26,8 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --break-system-packages --no-cache-dir --target /tmp/pydeps pytest warp-lang matplotlib
+          python -m pip install --break-system-packages --no-cache-dir "setuptools>=70.1" wheel packaging
+          python -m pip install --break-system-packages --no-cache-dir --target /tmp/pydeps pytest
           python -m pip install --break-system-packages --no-cache-dir --target /tmp/pydeps --no-deps --no-build-isolation "git+https://github.com/pypose/pypose.git"
         env:
           PIP_CACHE_DIR: /tmp/pip-cache
@@ -42,4 +43,4 @@ jobs:
           PYTHONPATH: /tmp/pydeps:${{ github.workspace }}
         run: |
           python -c "import torch; print('torch', torch.__version__)"
-          python -m pytest -q tests/autograd
+          python -m pytest -q tests/autograd tests/test_normal_operator.py tests/sparse/tuple

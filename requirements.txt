@@ -1,4 +1,6 @@
-scipy
-matplotlib
+# Development and test tools; runtime dependencies are declared in setup.py.
 pytest
-warp-lang
+torchvision
+setuptools>=70.1
+wheel
+packaging

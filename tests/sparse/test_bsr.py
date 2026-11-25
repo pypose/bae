@@ -42,6 +42,7 @@ def sp_diag_clamp_inp(x):
     return x
 
 class TestBSR:
+    @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required for native sparse operators')
     @pytest.mark.parametrize('device', ['cuda'])
     @pytest.mark.parametrize('block_prob', [0.0, 0.5, 1.0])
     @pytest.mark.parametrize('zero_prob', [0., 0.7, 1.0])

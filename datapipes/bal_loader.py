@@ -16,7 +16,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urljoin
 
-from .bal_io import read_bal_data
+from .bal_io import DTYPE, read_bal_data
 
 __all__ = ['get_problem', 'read_bal_data', 'DATA_URL', 'ALL_DATASETS']
 
@@ -83,9 +83,9 @@ def _ensure_problem_available(dataset: str, problem_name: str, cache_dir: Path) 
     os.replace(tmp_path, txt_path)
     return txt_path
 
-def get_problem(problem_name, dataset, cache_dir='bal_data', use_quat=True):
+def get_problem(problem_name, dataset, cache_dir='bal_data', use_quat=True, *, dtype=DTYPE):
     cache_path = Path(cache_dir)
     print(f"Preparing data for {dataset}...")
     _validate_dataset(dataset)
     problem_path = _ensure_problem_available(dataset, problem_name, cache_path)
-    return read_bal_data(str(problem_path), use_quat=use_quat)
+    return read_bal_data(str(problem_path), use_quat=use_quat, dtype=dtype)

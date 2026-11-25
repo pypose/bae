@@ -1,7 +1,10 @@
 import pypose as pp
-import warp as wp
-from warp import sparse as wpsparse
-from bae.sparse.warp_wrappers import format_vec_for_bsr
+try:
+    import warp as wp
+    from warp import sparse as wpsparse
+    from bae.sparse.warp_wrappers import format_vec_for_bsr
+except ImportError:
+    pass
 
 class TrustRegion(pp.optim.strategy.TrustRegion):
     def update(self, pg, last, loss, J, D, R, *args, **kwargs):

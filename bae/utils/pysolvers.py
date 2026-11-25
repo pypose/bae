@@ -2,7 +2,8 @@ from typing import Optional
 import torch
 from torch import Tensor
 from pypose.optim.solver import CG
-from bae.sparse.py_ops import spdiags_
+from .linear_operator import DiagonalMatVec
+from ..sparse import py_ops as _py_ops  # Registers native sparse diagonal dispatch.
 
 try:
     from bae.sparse.solve import CuDirectSparseSolver as CuDSS
@@ -20,22 +21,69 @@ except Exception as e:
 
 
 class PCG(CG):
+    """Diagonally preconditioned CG with scalar reductions for MPS solves."""
+
     def __init__(self, maxiter=None, tol=1e-5):
         super().__init__(maxiter, tol)
     def forward(self, A, b, x=None, M=None) -> torch.Tensor:
         was_vector = b.dim() == 1
         if was_vector:
             b = b[..., None]
-        l_diag = A.diagonal()
-        l_diag[l_diag.abs() < 1e-6] = 1e-6
-        M = spdiags_((1 / l_diag), None, shape=A.shape, layout=None)
-        if A.layout == torch.sparse_bsr:
-            M = M.to_sparse_bsr(blocksize=A.values().shape[-2:]).to(A.device)
+            if x is not None and x.dim() == 1:
+                x = x[..., None]
+        if M is None:
+            l_diag = A.diagonal().clone()
+            l_diag[l_diag.abs() < 1e-6] = 1e-6
+            M = DiagonalMatVec(l_diag.reciprocal())
 
-        res = super().forward(A, b, x, M)
+        if (b.device.type == 'mps' and b.dtype == torch.float32
+                and A.ndim == 2 and b.ndim == 2 and b.shape[-1] == 1):
+            res = self._forward_mps(A, b, x, M)
+        else:
+            res = super().forward(A, b, x, M)
         if was_vector:
             res = res.squeeze(-1)
         return res
+
+    def _forward_mps(self, A, b, x, M):
+        # TODO: Upstream these scalar reductions to PyPose CG, then remove this
+        # duplicate loop and delegate to super().forward on MPS as well.
+        # Preserve PyPose CG's recurrence, stopping checks, output-buffer use,
+        # and in-place warm-start updates. For a real single-column RHS, its
+        # two 1xN @ Nx1 products are scalar reductions. The equivalent
+        # multiply-and-sum avoids the slow MPS matrix-multiply dispatch.
+        if x is None:
+            x = torch.zeros_like(b)
+        elif x.shape != b.shape:
+            raise ValueError("x must have the same shape as b")
+
+        bnrm2 = torch.linalg.norm(b, dim=0)
+        if (bnrm2 == 0).all():
+            return b
+        atol = self.tol * bnrm2
+        maxiter = b.shape[-2] * 10 if self.maxiter is None else self.maxiter
+        r = b - A @ x if x.any() else b.clone()
+        q, z = torch.empty_like(b), torch.empty_like(b)
+        rho_prev, p = None, None
+
+        for iteration in range(maxiter):
+            if (torch.linalg.norm(r, dim=0) < atol).all():
+                return x
+
+            torch.matmul(M, r, out=z)
+            rho_cur = (r * z).sum(dim=0, keepdim=True)
+            if iteration:
+                p.mul_(rho_cur / rho_prev).add_(z)
+            else:
+                p = z.clone()
+
+            torch.matmul(A, p, out=q)
+            alpha = rho_cur / (p * q).sum(dim=0, keepdim=True)
+            x += alpha * p
+            r -= alpha * q
+            rho_prev = rho_cur
+
+        return x
 
 class SciPySpSolver(torch.nn.Module):
     def __init__(self, ):
