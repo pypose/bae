@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import os
 import warnings
 from importlib import import_module
 
 import torch
 from torch.utils._pytree import tree_flatten, tree_map
 
-from .config import pypose_torch_compile_enabled
 
+_ENV_FLAG = "BAE_USE_PYPOSE_TORCH_COMPILE"
 _PATCH_INSTALLED = False
+
+
+def pypose_torch_compile_enabled() -> bool:
+    value = os.environ.get(_ENV_FLAG, "")
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def install_pypose_torch_compile_monkeypatch() -> bool:

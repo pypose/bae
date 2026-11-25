@@ -3,10 +3,9 @@ import torch
 from pypose.optim import LevenbergMarquardt as ppLM
 import pypose as pp
 
-from ..autograd.graph import jacobian
+from ..autograd.graph import jacobian, jacobian_components, materialize_jacobian_components
 from ..autograd.function import TrackingTensor
 from ..sparse.py_ops import diagonal_op_, inv_op
-from ..utils.config import jacobian_tuple_enabled
 from ..utils.linear_operator import NormalMatVec
 from ..utils.parameter import parameter_update_shape
 
@@ -22,14 +21,11 @@ except ImportError:
 class LM(ppLM):
     def __init__(self, *args, matrix_free_normal: bool = False, **kwargs):
         self.matrix_free_normal = matrix_free_normal
-        self.tuple_mode = jacobian_tuple_enabled()
         super(LM, self).__init__(*args, **kwargs)
-        has_mps = any(param.device.type == 'mps'
-                      for pg in self.param_groups for param in pg['params'])
-        if not self.matrix_free_normal and (has_mps or self.tuple_mode):
-            raise ValueError("MPS and tuple Jacobians require matrix_free_normal=True.")
-        if has_mps and not self.tuple_mode:
-            raise RuntimeError("MPS optimization requires BAE_JACOBIAN_TUPLE=1.")
+        self.tuple_mode = any(param.device.type == 'mps'
+                              for pg in self.param_groups for param in pg['params'])
+        if self.tuple_mode and not self.matrix_free_normal:
+            raise ValueError("MPS optimization requires matrix_free_normal=True.")
         if not self.matrix_free_normal:
             from ..sparse.spgemm import CuSparse
             self.mm = CuSparse()
@@ -40,7 +36,12 @@ class LM(ppLM):
             weight = self.weight if weight is None else weight
             R = list(self.model(input))
             R = R[0]
-            J = jacobian(R, pg['params'])
+            if self.tuple_mode:
+                J = materialize_jacobian_components(
+                    jacobian_components(R, pg['params']), as_tuple=True,
+                )
+            else:
+                J = jacobian(R, pg['params'])
             if len(J) != len(pg['params']) or any(block is None for block in J):
                 raise ValueError("All optimized parameters must contribute to the residual.")
             if isinstance(R, TrackingTensor):

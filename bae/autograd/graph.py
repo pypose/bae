@@ -6,7 +6,6 @@ import pypose as pp
 import torch
 from torch.func import jacrev
 
-from ..utils.config import jacobian_tuple_enabled
 from ..utils.parameter import trim_parameter_jacobian_values
 from ..sparse.tensor import BSRTensor
 from .function import _INDEXED_TRACE_TAG
@@ -425,7 +424,7 @@ def jacobian_components(output, params):
     return tuple(result)
 
 
-def materialize_jacobian_components(components, *, as_tuple: Optional[bool] = None):
+def materialize_jacobian_components(components, *, as_tuple: bool = False):
     """Create sparse BSR tensors while preserving parameter alignment.
 
     An empty component group represents a parameter that does not contribute
@@ -590,10 +589,6 @@ def backward(output_, is_root=False):
 
 
 def jacobian(output, params):
-    # TODO: should we deprecate this in favor of jacobian_components + materialize_jacobian_components?
-    if jacobian_tuple_enabled():
-        components = jacobian_components(output, params)
-        return materialize_jacobian_components(components, as_tuple=True)
     assert output.optrace[0] in ('map', 'index', 'cat'), "Unsupported last operation in compute graph"
     _clear_jactrace(output, params)
     try:

@@ -1,8 +1,14 @@
+import os
+
 import torch
 
-from .config import pypose_ambient_grad_enabled
-
+_ENV_FLAG = "BAE_USE_PYPOSE_AMBIENT_GRAD"
 _PATCH_INSTALLED = False
+
+
+def pypose_ambient_grad_enabled() -> bool:
+    value = os.environ.get(_ENV_FLAG, "")
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _pm(input: torch.Tensor) -> torch.Tensor:
