@@ -17,9 +17,10 @@ def _rotvec_to_quat_xyzw(rotvec: torch.Tensor) -> torch.Tensor:
     return torch.cat([xyz, cos_half], dim=-1)
 
 
-def read_bal_data(file_name: str, use_quat: bool = True) -> dict:
+def read_bal_data(file_name: str, use_quat: bool = True, *, dtype: torch.dtype = DTYPE) -> dict:
     """
     Read a Bundle Adjustment in the Large dataset problem text file.
+    Floating-point tensors use ``dtype`` (default: torch.float64); indices use torch.int64.
 
     Format:
       <num_cameras> <num_points> <num_observations>
@@ -37,7 +38,7 @@ def read_bal_data(file_name: str, use_quat: bool = True) -> dict:
 
         camera_indices = torch.empty(n_observations, dtype=torch.int64)
         point_indices = torch.empty(n_observations, dtype=torch.int64)
-        points_2d = torch.empty((n_observations, 2), dtype=DTYPE)
+        points_2d = torch.empty((n_observations, 2), dtype=dtype)
 
         for i in range(n_observations):
             camera_index, point_index, x, y = file.readline().split()
@@ -46,12 +47,12 @@ def read_bal_data(file_name: str, use_quat: bool = True) -> dict:
             points_2d[i, 0] = float(x)
             points_2d[i, 1] = float(y)
 
-        camera_params = torch.empty(n_cameras * 9, dtype=DTYPE)
+        camera_params = torch.empty(n_cameras * 9, dtype=dtype)
         for i in range(n_cameras * 9):
             camera_params[i] = float(file.readline())
         camera_params = camera_params.reshape((n_cameras, 9))
 
-        points_3d = torch.empty(n_points * 3, dtype=DTYPE)
+        points_3d = torch.empty(n_points * 3, dtype=dtype)
         for i in range(n_points * 3):
             points_3d[i] = float(file.readline())
         points_3d = points_3d.reshape((n_points, 3))
@@ -64,7 +65,7 @@ def read_bal_data(file_name: str, use_quat: bool = True) -> dict:
 
     return {
         "problem_name": os.path.splitext(os.path.basename(file_name))[0],
-        "camera_params": camera_params.to(DTYPE),
+        "camera_params": camera_params.to(dtype),
         "points_3d": points_3d,
         "points_2d": points_2d,
         "camera_index_of_observations": camera_indices,

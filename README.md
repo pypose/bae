@@ -100,6 +100,7 @@
 
 - **Sparse Block Matrix Operations**: Optimized implementations of sparse matrix operations for large-scale optimization
 - **CUDA Acceleration**: Custom CUDA kernels for high-performance sparse linear algebra
+- **Apple Silicon Acceleration**: Metal BSR products and matrix-free LM with PCG
 - **PyTorch Integration**: Seamlessly integrates with PyTorch's automatic differentiation framework
 - **Levenberg-Marquardt Optimizer**: The vanilla LM algorithm for non-linear least squares problems
 - **Schur Complement Optimizer**: Solve a Schur-reduce linear system for [optimized memory consumption](https://github.com/pypose/bae/blob/release/doc/memory_performance.md) 
@@ -109,7 +110,7 @@
 - [ ] Reduce kernel launching cost in PCG solver by kernel fusion
 - [ ] Distributed Tensor (DTensor) and FSDP support for multi-GPU and distributed optimization (WIP in `distributed_dt`)
 - [x] Schur complement (added in [PR #35](https://github.com/pypose/bae/pull/35))
-- [ ] Add Apple Silicon GPU support, [PyTorch PR WIP](https://github.com/pytorch/pytorch/pull/177757)
+- [x] Apple Silicon GPU support through [tuple Jacobians and matrix-free LM](#apple-silicon--mps)
 - [ ] **Community-requested features:** Need support for a new framework, hardware backend, or more efficient memory allocation? Open an issue and tell us about your use case; we’d love to hear what you need.
 
 
@@ -117,7 +118,7 @@
 
 ### Prerequisites
 
-- CUDA toolkit (tested with CUDA 12.x)
+- CUDA toolkit for the CUDA backend (tested with CUDA 12.x)
 - PyTorch (2.0+)
 - (Optional) [CUDSS](https://developer.nvidia.com/cudss) (CUDA Sparse Solver library)
 

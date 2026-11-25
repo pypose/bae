@@ -1,4 +1,5 @@
 from time import perf_counter
+import argparse
 
 import pypose as pp
 import torch
@@ -54,12 +55,36 @@ def least_square_error(camera_params, points, cidx, pidx, observes):
     return torch.sum(loss**2, dim=-1).mean()
 
 
-def main():
-    dataset = get_problem(TARGET_PROBLEM, TARGET_DATASET)
-    print(f"Fetched {TARGET_PROBLEM} from {TARGET_DATASET}")
+def _synchronize(device):
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Bundle adjustment with BAE")
+    parser.add_argument("--device", choices=("cpu", "cuda", "mps"), default=DEVICE)
+    parser.add_argument("--dataset", default=TARGET_DATASET)
+    parser.add_argument("--problem", default=TARGET_PROBLEM)
+    parser.add_argument("--iterations", type=int, default=20)
+    args = parser.parse_args(argv)
+    if args.iterations < 1:
+        parser.error("--iterations must be positive")
+    device = torch.device(args.device)
+    if device.type == "mps":
+        if not torch.backends.mps.is_available():
+            parser.error("MPS is unavailable; use an Apple Silicon Mac with MPS-enabled PyTorch")
+    if device.type == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA is unavailable; choose --device mps or --device cpu")
+    dataset = get_problem(
+        args.problem, args.dataset,
+        dtype=torch.float32 if device.type == "mps" else torch.float64,
+    )
+    print(f"Fetched {args.problem} from {args.dataset}")
 
     dataset = {
-        key: value.to(DEVICE)
+        key: value.to(device)
         for key, value in dataset.items()
         if isinstance(value, torch.Tensor)
     }
@@ -72,10 +97,13 @@ def main():
     model = Residual(
         dataset["camera_params"][:, :NUM_CAMERA_PARAMS].clone(),
         dataset["points_3d"].clone(),
-    ).to(DEVICE)
+    ).to(device)
     strategy = pp.optim.strategy.TrustRegion(up=2.0, down=0.5**4)
     solver = PCG(tol=1e-4, maxiter=250)
-    optimizer = LM(model, strategy=strategy, solver=solver, reject=30)
+    optimizer = LM(
+        model, strategy=strategy, solver=solver, reject=30,
+        matrix_free_normal=device.type in ("cpu", "mps"),
+    )
 
     print('Loss:', least_square_error(
         model.pose,
@@ -87,12 +115,13 @@ def main():
 
     print("Initial loss", optimizer.model.loss(input, None).item())
 
+    _synchronize(device)
     start = perf_counter()
-    for idx in range(20):
+    for idx in range(args.iterations):
         loss = optimizer.step(input)
         print("Iteration", idx, "loss", loss.item(), "time", perf_counter() - start)
 
-    torch.cuda.synchronize()
+    _synchronize(device)
     end = perf_counter()
     print("Time", end - start)
 
