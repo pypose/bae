@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
-// Metal adaptation of NVIDIA Warp release-1.19 sparse.py's make_bsr_mv_kernel,
-// make_bsr_mv_tiled_kernel, make_bsr_mv_transpose_kernel and scale kernel:
-// https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L4890-L5172
+// Metal adaptation of NVIDIA Warp release-1.19 sparse matrix-vector kernels.
+// Changes: Metal thread dispatch, SIMD reductions and float32 atomic accumulation.
+// License text: third_party/warp/LICENSE.md.
 //
 // BAE tuples use compact BSR storage, so Warp's optional row_counts is absent:
 // row_end = crow[row + 1], row_count = crow[row + 1] - crow[row]. Blocks are
@@ -12,6 +12,7 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L4884-L4923
 template <typename Index, int BlockCols, int BlockRows = 0>
 kernel void bsr_mv(
     const device Index* crow [[buffer(0)]],
@@ -58,6 +59,7 @@ kernel void bsr_mv(
     y[yi] = v;
 }
 
+// https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L4925-L4974
 template <typename Index, int TileSize, int BlockRows = 0, int BlockCols = 0>
 kernel void bsr_mv_tiled(
     const device Index* crow [[buffer(0)]],
@@ -121,6 +123,7 @@ kernel void bsr_mv_tiled(
     }
 }
 
+// https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L4976-L5006
 template <typename Index, int BlockRows>
 kernel void bsr_mv_transpose(
     const device Index* crow [[buffer(0)]],
@@ -142,6 +145,7 @@ kernel void bsr_mv_transpose(
 
     // Exact compact-storage bsr_row_index: lower_bound(crow, block+1) - 1.
     // This includes leading and consecutive empty rows.
+    // https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L2090-L2130
     long lo = 0, hi = nrows + 1;
     while (lo < hi) {
         const long mid = lo + (hi - lo) / 2;
@@ -168,6 +172,7 @@ kernel void bsr_mv_transpose(
         y + long(col[block]) * bc + subcol, alpha * col_sum, memory_order_relaxed);
 }
 
+// https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L3375-L3382
 kernel void bsr_scale(
     constant float& beta [[buffer(0)]],
     device float* y [[buffer(1)]],

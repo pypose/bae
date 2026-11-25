@@ -271,7 +271,7 @@ if __name__ == '__main__':
         description = 'PyTorch implementation of BA',
         long_description = readme(),
         long_description_content_type = "text/markdown",
-        license_files=["LICENSE", "third_party/warp/LICENSE.md", "third_party/warp/ORIGIN.txt"],
+        license_files=["LICENSE", "third_party/warp/LICENSE.md"],
         python_requires = ">=3.8",
         install_requires=[
             'torch>=2.13; sys_platform == "darwin" and platform_machine == "arm64"',

@@ -227,6 +227,8 @@ def bsr_transposed(A, *, size):
     As with Warp's bsr_transposed + bsr_mv, assembling this once allows repeated
     transpose products to use row reduction instead of contended atomic sums.
     The returned values own their storage; rebuild after changing A.
+    PyTorch implementation of the semantics documented in:
+    https://github.com/NVIDIA/warp/blob/release-1.19/warp/_src/sparse.py#L2889-L3148
     """
     crow, col, values = _validate(A, size)
     nnz = values.shape[0]

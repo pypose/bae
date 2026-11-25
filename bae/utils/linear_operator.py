@@ -1,12 +1,50 @@
 from __future__ import annotations
 
-from typing import Optional, Union, Any, Tuple
+from typing import Optional, Union, Tuple
 
 import torch
 from torch import Tensor
 
 
-class NormalMatVec:
+class _MatVecOperator:
+    ndim = 2
+
+    def __call__(self, x):
+        return self.matvec(x)
+
+    def __matmul__(self, x):
+        return self.matvec(x)
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        kwargs = {} if kwargs is None else kwargs
+        if func is torch.matmul and len(args) >= 2 and isinstance(args[0], cls):
+            out = kwargs.get("out")
+            return args[0].matvec(args[1], out=out[0] if isinstance(out, tuple) else out)
+        return NotImplemented
+
+
+class DiagonalMatVec(_MatVecOperator):
+    """Apply a diagonal matrix without constructing a sparse tensor."""
+
+    def __init__(self, diagonal):
+        if diagonal.ndim != 1:
+            raise ValueError("diagonal must be one-dimensional")
+        self.values = diagonal
+        self.device, self.dtype = diagonal.device, diagonal.dtype
+        self.shape = (diagonal.numel(), diagonal.numel())
+
+    def matvec(self, x, out=None):
+        if x.ndim not in (1, 2) or x.shape[0] != self.shape[1]:
+            raise ValueError("x must be a vector or matrix with compatible leading dimension")
+        diagonal = self.values if x.ndim == 1 else self.values[:, None]
+        return torch.mul(diagonal, x, out=out) if out is not None else diagonal * x
+
+    def diagonal(self):
+        return self.values
+
+
+class NormalMatVec(_MatVecOperator):
     r"""Matrix-free normal-equation linear operator.
 
     Given a Jacobian J (dense, CSR/COO, or BSR), this operator represents:
@@ -14,6 +52,11 @@ class NormalMatVec:
         A x = J^T (J x) + damping * diag(J^T J) * x
 
     where diag(J^T J) is computed as the column-wise sum of squares of J.
+    Supplying ``diag`` replaces the normal matrix's diagonal before damping,
+    matching LM's explicit clamp-and-damp behavior.
+    ``raw_diag`` can reuse a previously computed diagonal. The replacement and
+    correction must use the same reduction result: separate parallel sums can
+    differ by more than a small damping term in float32.
     """
 
     def __init__(
@@ -21,8 +64,10 @@ class NormalMatVec:
         J: Tensor,
         damping: Union[float, Tensor] = 0.0,
         diag: Optional[Tensor] = None,
+        *,
+        raw_diag: Optional[Tensor] = None,
     ):
-        if not torch.is_tensor(J):
+        if not isinstance(J, Tensor):
             raise TypeError("J must be a torch.Tensor")
         if J.ndim != 2:
             raise ValueError("J must be 2-D")
@@ -32,14 +77,20 @@ class NormalMatVec:
 
         self.device = J.device
         self.dtype = J.dtype
-        self.layout = J.layout if J.layout != torch.sparse_coo else torch.sparse_csr
 
         self.shape: Tuple[int, int] = (J.shape[1], J.shape[1])
         self.ndim: int = 2
 
-        self._diag: Tensor = diag if diag is not None else self._compute_diag(J)
+        self._raw_diag = self._compute_diag(J) if raw_diag is None else raw_diag
+        if self._raw_diag.ndim != 1 or self._raw_diag.numel() != J.shape[1]:
+            raise ValueError("raw_diag must be 1-D with length equal to J.shape[1]")
+        if self._raw_diag.device != self.device or self._raw_diag.dtype != self.dtype:
+            raise ValueError("raw_diag must have the same device and dtype as J")
+        self._diag: Tensor = diag if diag is not None else self._raw_diag
         if self._diag.ndim != 1 or self._diag.numel() != J.shape[1]:
             raise ValueError("diag must be 1-D with length equal to J.shape[1]")
+        if self._diag.device != self.device or self._diag.dtype != self.dtype:
+            raise ValueError("diag must have the same device and dtype as J")
 
         self.set_damping(damping)
 
@@ -50,59 +101,40 @@ class NormalMatVec:
             self.damping = damping.to(device=self.device, dtype=self.dtype)
         else:
             self.damping = float(damping)
+        self._effective_diag = self._diag * (1.0 + self.damping)
+        # Keep small positive damping even when 1 + damping rounds to 1 in
+        # float32. Subtract only the intended diagonal replacement.
+        self._correction = (self._diag - self._raw_diag) + self.damping * self._diag
 
     def diagonal(self) -> Tensor:
-        damp = self._damping_value()
-        if damp is None:
-            return self._diag
-        return self._diag * (1.0 + damp)
+        return self._effective_diag
 
-    def matvec(self, x: Tensor) -> Tensor:
-        if x.ndim == 1:
-            x2d = x.unsqueeze(-1)
-        elif x.ndim == 2:
-            x2d = x
-        else:
-            raise ValueError("x must be 1-D or 2-D")
+    def matvec(self, x: Tensor, out: Optional[Tensor] = None) -> Tensor:
+        if x.ndim not in (1, 2) or x.shape[0] != self.shape[1]:
+            raise ValueError("x must be a vector or matrix with compatible leading dimension")
+        if out is not None:
+            if out.shape != x.shape or out.device != self.device or out.dtype != self.dtype:
+                raise ValueError("out must have the result's shape, device, and dtype")
+            if not out.is_contiguous():
+                raise ValueError("out must be contiguous")
+            if torch._C._overlaps(x, out):
+                x = x.clone()
+        x2d = x.unsqueeze(-1) if x.ndim == 1 else x
 
         if x2d.device != self.device or x2d.dtype != self.dtype:
             x2d = x2d.to(device=self.device, dtype=self.dtype)
 
+        # Both native and tuple-backed Jacobians use ordinary tensor dispatch.
         y = self.J @ x2d
-        Jt = self._get_Jt()
-        z = Jt @ y
+        output = None if out is None else out.reshape(x2d.shape)
+        z = torch.matmul(self._get_Jt(), y, out=output)
+        z.addcmul_(self._correction.unsqueeze(-1), x2d)
 
-        damp = self._damping_value()
-        if damp is not None:
-            z = z + damp * self._diag.unsqueeze(-1) * x2d
-
+        if out is not None:
+            return out
         return z.squeeze(-1) if x.ndim == 1 else z
 
-    def __call__(self, x: Tensor) -> Tensor:
-        return self.matvec(x)
-
-    def __matmul__(self, x: Tensor) -> Tensor:
-        return self.matvec(x)
-
-    @classmethod
-    def __torch_function__(  # type: ignore[override]
-        cls, func: Any, types: Any, args: Tuple[Any, ...] = (), kwargs: Optional[dict] = None
-    ):
-        if kwargs is None:
-            kwargs = {}
-        if func is torch.matmul and len(args) >= 2:
-            A, B = args[0], args[1]
-            if isinstance(A, cls):
-                out = kwargs.get("out", None)
-                result = A.matvec(B)
-                if out is not None:
-                    out_tensor = out[0] if isinstance(out, tuple) else out
-                    out_tensor.copy_(result)
-                    return out_tensor
-                return result
-        return NotImplemented
-
-    def _get_Jt(self) -> Tensor:
+    def _get_Jt(self):
         if self._Jt is None:
             Jt = self.J.mT
             if Jt.layout == torch.sparse_csc:
@@ -113,17 +145,10 @@ class NormalMatVec:
             self._Jt = Jt
         return self._Jt
 
-    def _damping_value(self) -> Optional[Tensor]:
-        if isinstance(self.damping, Tensor):
-            if self.damping.item() == 0.0:
-                return None
-            return self.damping
-        if self.damping == 0.0:
-            return None
-        return torch.tensor(self.damping, device=self.device, dtype=self.dtype)
-
     @staticmethod
     def _compute_diag(J: Tensor) -> Tensor:
+        if hasattr(J, 'normal_diagonal'):
+            return J.normal_diagonal()
         if J.layout == torch.strided:
             return J.square().sum(dim=0)
 
